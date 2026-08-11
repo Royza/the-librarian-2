@@ -118,6 +118,9 @@ export class PathFinder {
     this.epoch = 0;
     this.open = [];
     this.budget = 0;
+    // Local playtest diagnostics; reset with each generated run.
+    this.findCount = 0;
+    this.failureCount = 0;
   }
 
   /** Nearest walkable cell to a world point (agents can start inside a shelf). */
@@ -144,10 +147,11 @@ export class PathFinder {
    * string-pulled so agents cut corners naturally.
    */
   find(sx, sz, tx, tz, maxNodes = 2600) {
+    this.findCount++;
     const L = this.L;
     const start = this._snap(sx, sz);
     const goal = this._snap(tx, tz);
-    if (start < 0 || goal < 0) return null;
+    if (start < 0 || goal < 0) { this.failureCount++; return null; }
     if (start === goal) return [{ x: tx, z: tz }];
 
     this.epoch++;
@@ -207,7 +211,7 @@ export class PathFinder {
       }
     }
 
-    if (found < 0) return null;
+    if (found < 0) { this.failureCount++; return null; }
 
     const raw = [];
     let n = found;

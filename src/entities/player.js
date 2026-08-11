@@ -8,6 +8,82 @@ const RADIUS = 0.36;
 const _res = { x: 0, z: 0, hit: null };
 const _dir = new THREE.Vector3();
 
+export const BASE_PLAYER_STATS = Object.freeze({
+  moveSpeed: 5.0,
+  baseMoveSpeed: 5.0,
+  sprintMul: 1.5,
+  pickupRadius: 2.2,
+  returnRadius: 2.4,
+  carrySlots: 6,
+  maxStamina: 100,
+  staminaRegen: 14,
+  staminaDrain: 18,
+  maxHealth: 100,
+  regen: 1.6,
+  regenDelay: 5,
+  chaosDampening: 0,
+  xpMultiplier: 1,
+  pickupSpeed: 1,
+  dashCooldown: 2.2,
+  dashDistance: 5.4,
+  magnetStrength: 1,
+  disasterMitigation: 1,
+  disasterDurationScale: 1,
+  mopSpeed: 1,
+  autoClean: false,
+});
+
+const perkLevel = (levels, id) => Math.max(0, Number(levels?.[id]) || 0);
+
+/**
+ * Compute every stat that can receive both permanent and in-run bonuses in one
+ * place. Rebuilding from levels makes upgrade order irrelevant and prevents a
+ * later assignment from silently erasing an earlier perk.
+ */
+export function derivePlayerStats(metaLevels = {}, upgradeLevels = {}, characterBonuses = {}) {
+  const meta = (id) => perkLevel(metaLevels, id);
+  const run = (id) => perkLevel(upgradeLevels, id);
+  const moveSpeedMul = Number(characterBonuses.moveSpeedMul) || 1;
+  const baseMoveSpeed = BASE_PLAYER_STATS.moveSpeed * (1 + 0.04 * meta('goodShoes')) * moveSpeedMul;
+  const backpackSortBonus = run('backpack') >= 3 ? 0.9 * (run('backpack') - 2) : 0;
+
+  return {
+    ...BASE_PLAYER_STATS,
+    baseMoveSpeed,
+    moveSpeed: baseMoveSpeed * (1 + 0.08 * run('comfyShoes')),
+    pickupRadius: BASE_PLAYER_STATS.pickupRadius
+      + 0.3 * meta('longReach')
+      + 0.55 * run('longArms')
+      + (Number(characterBonuses.pickupRadius) || 0),
+    returnRadius: BASE_PLAYER_STATS.returnRadius
+      + 0.7 * run('shelfSense')
+      + backpackSortBonus
+      + (Number(characterBonuses.returnRadius) || 0),
+    carrySlots: Math.max(1, BASE_PLAYER_STATS.carrySlots
+      + 2 * meta('tenure')
+      + 2 * run('backpack')
+      + (Number(characterBonuses.carrySlots) || 0)),
+    maxStamina: BASE_PLAYER_STATS.maxStamina + 20 * meta('espresso') + 25 * run('fitness'),
+    staminaRegen: BASE_PLAYER_STATS.staminaRegen
+      * (1 + 0.12 * meta('espresso'))
+      * (1 + 0.15 * run('fitness')),
+    sprintMul: BASE_PLAYER_STATS.sprintMul + 0.15 * run('sprintCoach'),
+    staminaDrain: BASE_PLAYER_STATS.staminaDrain * (1 - 0.1 * run('sprintCoach')),
+    maxHealth: BASE_PLAYER_STATS.maxHealth + 20 * meta('sturdySpine') + 25 * run('laminator'),
+    dashCooldown: BASE_PLAYER_STATS.dashCooldown * (1 - 0.18 * run('dashTraining')),
+    dashDistance: BASE_PLAYER_STATS.dashDistance + 0.7 * run('dashTraining'),
+    chaosDampening: 4 * meta('unionRep') + 5 * run('zenFocus'),
+    xpMultiplier: 1 + 0.08 * meta('overtime') + 0.1 * run('readingGlasses'),
+    // Separate percentage reductions compound. At maximom investment this
+    // leaves disasters threatening instead of reducing their damage to 7%.
+    disasterMitigation: (1 - 0.15 * meta('insurance')) * (1 - 0.12 * run('fireDrill')),
+    disasterDurationScale: Math.max(0.25, 1 - 0.15 * run('fireDrill')),
+    // Cleaning-speed bonuses add in percentage points, matching their copy.
+    mopSpeed: 1 + 0.2 * meta('janitorial') + 0.3 * run('janitor'),
+    autoClean: run('janitor') >= 3,
+  };
+}
+
 /**
  * The Librarian. Movement, stamina, the auto-vacuum pickup that the whole game
  * loop hangs off, and the arm-load of books you're desperately trying to file.
@@ -19,37 +95,23 @@ export class Player {
     this.vx = 0; this.vz = 0;
     this.yaw = 0;
     this.radius = RADIUS;
+    this.dropRng = game.rng.fork(202);
 
-    this.stats = {
-      moveSpeed: 5.0,
-      sprintMul: 1.5,
-      pickupRadius: 2.2,
-      returnRadius: 2.4,
-      carrySlots: 6,
-      maxStamina: 100,
-      staminaRegen: 14,
-      staminaDrain: 18,
-      maxHealth: 100,
-      regen: 1.6,             // HP/s, once you've been left alone for a moment
-      regenDelay: 5,
-      chaosDampening: 0,
-      xpMultiplier: 1,
-      pickupSpeed: 1,
-      dashCooldown: 2.2,
-      dashDistance: 5.4,
-      magnetStrength: 1,
-    };
+    this.character = getCharacter(game.characterId);
+    this.metaLevels = {};
+    this.upgradeLevels = {};
+    this.stats = derivePlayerStats(this.metaLevels, this.upgradeLevels, this.character.bonuses);
 
     this.health = this.stats.maxHealth;
     this.stamina = this.stats.maxStamina;
     this.carried = [];
-    this.upgradeLevels = {};
 
     this.sinceHurt = 99;
     this.dashTimer = 0;
     this.dashActive = 0;
     this.invuln = 0;
     this.hurtFlash = 0;
+    this.fragileCooldown = 0;
 
     // Status effects: slipping on a banana, mushroom growth, chilli dash, …
     this.effects = new Map();
@@ -58,7 +120,6 @@ export class Player {
     this.phase = 0;
     this.anim = { phase: 0, speed: 0, lean: 0, armMode: 'swing', headYaw: 0, headPitch: 0, flail: 0, crouch: 0, hurt: 0, celebrate: 0 };
 
-    this.character = getCharacter(game.characterId);
     this.model = new SoloCharacter(game.render.scene, game.mats, {
       height: this.character.height,
       chunk: this.character.chunk,
@@ -71,7 +132,6 @@ export class Player {
 
     this.stepTimer = 0;
     this.lastShelveTime = -10;
-    this.stats.baseMoveSpeed = this.stats.moveSpeed;
   }
 
   get carryY() { return 1.05 * this.scaleMul; }
@@ -86,10 +146,19 @@ export class Player {
 
   damage(amount, source) {
     if (this.invuln > 0) return false;
+    if (this.game.progression?.consumeLaminatedShield?.()) {
+      this.invuln = 0.25;
+      this.game.audio?.play?.('shelve', { rate: 1.45, volume: 0.55 });
+      this.game.fx?.ring?.(this.x, 0.4, this.z, { r0: 0.3, r1: 2.6, dur: 0.4, color: 0xffe08a });
+      this.game.hud?.popup?.(this.x, 2.0, this.z, 'BADGE BLOCKED IT', '#ffe08a');
+      this.game.events?.emit?.('damageBlocked', { amount, source, kind: 'laminatedBadge' });
+      return false;
+    }
     this.health = Math.max(0, this.health - amount);
     this.invuln = 0.7;
     this.hurtFlash = 1;
     this.sinceHurt = 0;
+    this._breakFragile('hit');
     this.game.camera.addTrauma(0.28);
     this.game.events.emit('playerHurt', { amount, source });
     return true;
@@ -168,6 +237,7 @@ export class Player {
     const blockedX = Math.abs(_res.x - nx) > 1e-4;
     const blockedZ = Math.abs(_res.z - nz) > 1e-4;
     this.x = _res.x; this.z = _res.z;
+    if (this.dashActive > 0 && (blockedX || blockedZ)) this._breakFragile('dash');
     if (blockedX) this.vx *= 0.25;
     if (blockedZ) this.vz *= 0.25;
 
@@ -191,6 +261,7 @@ export class Player {
 
     this.hurtFlash = Math.max(0, this.hurtFlash - dt * 2.6);
     this.invuln = Math.max(0, this.invuln - dt);
+    this.fragileCooldown = Math.max(0, this.fragileCooldown - dt);
 
     // Slow regeneration between scrapes. Without it a long run dies by a
     // thousand toddlers regardless of how well the shelves are going.
@@ -226,6 +297,7 @@ export class Player {
     const R = this.stats.pickupRadius * this.scaleMul;
     game.items.forEachInRadius(this.x, this.z, R, (it) => {
       if (it.state !== ITEM_STATE.FREE || !it.grounded) return;
+      if (it.trainingPowerTarget) return;
       if (this.isFull) return;
       it.state = ITEM_STATE.FLYING;
       it.holder = this;
@@ -253,10 +325,30 @@ export class Player {
   _applyHazardOnPickup(it) {
     if (!it.hazard) return;
     const h = it.hazard;
+    if (h.effect === 'slip') { this.addEffect('slip', 5); this.game.audio.play('whoosh', { volume: 0.45 }); }
     if (h.effect === 'grow') { this.addEffect('grow', 12); this.game.audio.play('powerup'); }
     if (h.effect === 'dash') { this.addEffect('spicy', 8); this.game.audio.play('powerup'); }
     if (h.effect === 'heavy') this.addEffect('heavy', 6);
     if (h.effect === 'fizz') { this.game.fx.fizz(this.x, 1.2, this.z); this.game.camera.addTrauma(0.12); }
+  }
+
+  /** Turn one carried grocery egg into a cleanable mess after a real impact. */
+  _breakFragile(reason) {
+    if (this.fragileCooldown > 0) return false;
+    const index = this.carried.findIndex((it) => it.hazard?.effect === 'fragile');
+    if (index < 0 || !this.game.disasters) return false;
+
+    const [item] = this.carried.splice(index, 1);
+    this.game.items.release(item);
+    this.game.disasters.addMess(this.x, this.z, {
+      kind: 'brokenEgg', size: 1.7, color: 0xe8d77a, timer: 18,
+    });
+    this.fragileCooldown = 0.75;
+    this.game.audio?.play?.('bookfall', { volume: 0.75, rate: 1.35 });
+    this.game.fx?.burst?.(this.x, 0.7, this.z, 20, { speed: 3, color: [0xfff0aa, 0xffffff], life: 0.7, size: 0.16, grav: -5 });
+    this.game.hud?.popup?.(this.x, 1.8, this.z, 'EGGS BROKEN — MOP IT UP', '#fff0aa');
+    this.game.events?.emit?.('fragileBroken', { reason, x: this.x, z: this.z });
+    return true;
   }
 
   _autoShelve(dt) {
@@ -268,6 +360,7 @@ export class Player {
 
     for (let i = this.carried.length - 1; i >= 0; i--) {
       const it = this.carried[i];
+      if (it.trainingPowerTarget) continue;
       let target = null, bestD = Infinity;
       for (const b of bays) {
         if (!bayAccepts(b, it.color)) continue;
@@ -275,8 +368,8 @@ export class Player {
         if (d < bestD) { bestD = d; target = b; }
       }
       if (!target) continue;
+      if (!game.items.returnTo(it, target)) continue;
       this.carried.splice(i, 1);
-      game.items.returnTo(it, target);
       this.lastShelveTime = game.clock;
     }
   }
@@ -298,7 +391,7 @@ export class Player {
     }
   }
 
-  /** Nearest bay that will accept a colour we're holding — used by the HUD arrow. */
+  /** Nearest bay that will accept a color we're holding — used by the HUD arrow. */
   guidanceTarget() {
     if (!this.carried.length) return null;
     const colors = new Set(this.carried.map((c) => c.color));
@@ -312,9 +405,39 @@ export class Player {
     return best;
   }
 
+  /** Install a complete permanent-perk snapshot before a run begins. */
+  setMetaLevels(levels = {}) {
+    this.metaLevels = { ...levels };
+    this.refreshDerivedStats();
+  }
+
+  /** Rebuild composable stats and mirror disaster-specific values to its manager. */
+  refreshDerivedStats({ restoreGrowth = false } = {}) {
+    const oldMaxHealth = this.stats?.maxHealth ?? BASE_PLAYER_STATS.maxHealth;
+    const oldMaxStamina = this.stats?.maxStamina ?? BASE_PLAYER_STATS.maxStamina;
+    Object.assign(this.stats, derivePlayerStats(this.metaLevels, this.upgradeLevels, this.character?.bonuses));
+
+    if (restoreGrowth) {
+      this.health = Math.min(this.stats.maxHealth, this.health + Math.max(0, this.stats.maxHealth - oldMaxHealth));
+      this.stamina = Math.min(this.stats.maxStamina, this.stamina + Math.max(0, this.stats.maxStamina - oldMaxStamina));
+    } else {
+      this.health = Math.min(this.health, this.stats.maxHealth);
+      this.stamina = Math.min(this.stamina, this.stats.maxStamina);
+    }
+
+    const disasters = this.game.disasters;
+    if (disasters) {
+      disasters.mitigation = this.stats.disasterMitigation;
+      disasters.durationScale = this.stats.disasterDurationScale;
+      disasters.mopSpeed = this.stats.mopSpeed;
+      disasters.autoClean = this.stats.autoClean;
+    }
+  }
+
   applyUpgrade(id, level, def) {
     this.upgradeLevels[id] = level;
     def.apply?.(this, level);
+    this.refreshDerivedStats({ restoreGrowth: true });
   }
 
   dropAll() {
@@ -322,9 +445,9 @@ export class Player {
       it.state = ITEM_STATE.FREE;
       it.grounded = false;
       it.holder = null;
-      it.vx = (Math.random() - 0.5) * 3;
-      it.vy = 2 + Math.random() * 2;
-      it.vz = (Math.random() - 0.5) * 3;
+      it.vx = this.dropRng.range(-1.5, 1.5);
+      it.vy = this.dropRng.range(2, 4);
+      it.vz = this.dropRng.range(-1.5, 1.5);
     }
     this.carried.length = 0;
   }

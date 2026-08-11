@@ -1,8 +1,13 @@
-import { UPGRADES, draftUpgrades } from '../data/upgrades.js';
+import { UPGRADES, SIGNATURE_POWER_IDS, draftUpgrades } from '../data/upgrades.js';
 import { RNG } from '../core/rng.js';
 
-const XP_BASE = 120;
-const XP_GROWTH = 1.34;
+export const XP_BASE = 180;
+export const XP_GROWTH = 1.5;
+
+/** XP needed to advance from the supplied run level. */
+export function xpRequiredForLevel(level = 1) {
+  return Math.floor(XP_BASE * Math.pow(XP_GROWTH, Math.max(0, level - 1)));
+}
 
 /** XP, levels, the level-up draft, and the small drip-feed rewards. */
 export class Progression {
@@ -10,7 +15,7 @@ export class Progression {
     this.game = game;
     this.level = 1;
     this.xp = 0;
-    this.xpToNext = XP_BASE;
+    this.xpToNext = xpRequiredForLevel(this.level);
     this.levels = {};             // upgradeId -> level
     this.startingGrants = {};     // from meta perks
     this.rng = new RNG(game.seed + '-draft');
@@ -27,6 +32,8 @@ export class Progression {
     this._teaCounter = 0;
     this.comboBonus = 1;
     this.comboTime = 3.2;
+    this.laminatedBlockedWave = -1;
+    this.tutorialPowerOffered = false;
 
     this.pendingLevels = 0;
     this.currentOffer = null;
@@ -44,10 +51,10 @@ export class Progression {
       for (let i = 1; i <= lvl; i++) this._take(UPGRADES[id]);
     }
     for (let i = 0; i < this.headStart; i++) {
-      const options = draftUpgrades(this.rng, this.levels, 1);
+      const options = draftUpgrades(this.rng, this.levels, 1, new Set(), this.level);
       if (options[0]) this._take(options[0]);
       this.level++;
-      this.xpToNext = Math.floor(XP_BASE * Math.pow(XP_GROWTH, this.level - 1));
+      this.xpToNext = xpRequiredForLevel(this.level);
     }
   }
 
@@ -59,7 +66,7 @@ export class Progression {
     while (this.xp >= this.xpToNext) {
       this.xp -= this.xpToNext;
       this.level++;
-      this.xpToNext = Math.floor(XP_BASE * Math.pow(XP_GROWTH, this.level - 1));
+      this.xpToNext = xpRequiredForLevel(this.level);
       this.pendingLevels++;
     }
     if (this.pendingLevels > 0 && !this.currentOffer) this._openDraft();
@@ -74,12 +81,48 @@ export class Progression {
     }
   }
 
+  /**
+   * Laminated Badge defines a wave as a fixed 60-second window from run start.
+   * The timestamp-derived index means the shield resets reliably even if a
+   * level-up pauses or slows the simulation between waves.
+   */
+  consumeLaminatedShield() {
+    if ((this.levels.laminator || 0) < 1) return false;
+    const wave = Math.floor((this.game.run?.elapsed || 0) / 60);
+    if (wave === this.laminatedBlockedWave) return false;
+    this.laminatedBlockedWave = wave;
+    return true;
+  }
+
+  _ensureTutorialPower(options) {
+    if (!this.game.run?.tutorialActive || this.tutorialPowerOffered || !options.length) return options;
+    this.tutorialPowerOffered = true;
+    if (options.some((def) => SIGNATURE_POWER_IDS.includes(def.id))) return options;
+
+    const offered = new Set(options.map((def) => def.id));
+    const powers = Object.values(UPGRADES).filter((def) => (
+      SIGNATURE_POWER_IDS.includes(def.id)
+      && (this.levels[def.id] || 0) < def.maxLevel
+      && ((this.levels[def.id] || 0) > 0 || this.level >= (def.minDraftLevel || 1))
+      && !offered.has(def.id)
+    ));
+    if (!powers.length) return options;
+    const replacement = this.rng.pick(powers);
+    return [...options.slice(0, -1), replacement];
+  }
+
   /** Present the next draft. Returns false when there is nothing left to offer. */
   _openDraft() {
     // Every upgrade maxed out is a real end-state, not a bug — convert the
     // remaining levels into health so the run never stalls on an empty screen.
     while (this.pendingLevels > 0) {
-      const options = draftUpgrades(this.rng, this.levels, this.draftCount);
+      const options = this._ensureTutorialPower(draftUpgrades(
+        this.rng,
+        this.levels,
+        this.draftCount,
+        new Set(),
+        this.level,
+      ));
       if (options.length) {
         this.currentOffer = options;
         this.game.state = 'levelup';
@@ -98,17 +141,24 @@ export class Progression {
 
   _resume() {
     this.currentOffer = null;
+    if (this.game.state !== 'levelup') return;
     this.game.state = 'playing';
     this.game.input.enabled = true;
     this.game.menus.hideAll();
   }
 
   reroll() {
-    if (this.rerollsLeft <= 0 || !this.currentOffer) return false;
+    if (this.game.state !== 'levelup' || this.rerollsLeft <= 0 || !this.currentOffer) return false;
     this.rerollsLeft--;
     const exclude = new Set(this.currentOffer.map((o) => o.id));
-    let options = draftUpgrades(this.rng, this.levels, this.draftCount, exclude);
-    if (!options.length) options = draftUpgrades(this.rng, this.levels, this.draftCount);
+    let options = draftUpgrades(this.rng, this.levels, this.draftCount, exclude, this.level);
+    if (!options.length) options = draftUpgrades(
+      this.rng,
+      this.levels,
+      this.draftCount,
+      new Set(),
+      this.level,
+    );
     this.currentOffer = options;
     this.game.audio.play('ui');
     this.game.menus.showLevelUp(options, this.level, this.rerollsLeft);
@@ -116,8 +166,9 @@ export class Progression {
   }
 
   choose(id) {
+    if (this.game.state !== 'levelup' || !this.currentOffer?.some((option) => option.id === id)) return false;
     const def = UPGRADES[id];
-    if (!def) return;
+    if (!def) return false;
     this._take(def);
     this.currentOffer = null;
     this.pendingLevels--;
@@ -127,6 +178,12 @@ export class Progression {
 
     if (this.pendingLevels > 0) this._openDraft();
     else this._resume();
+    return true;
+  }
+
+  cancelDraft() {
+    this.currentOffer = null;
+    this.pendingLevels = 0;
   }
 
   _take(def) {

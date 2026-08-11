@@ -50,7 +50,7 @@ export class RenderSystem {
     // Tone mapping happens in post so bloom operates on linear HDR values.
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.shadowMap.autoUpdate = true;
     // We reset per frame in the game loop so the debug overlay can read totals
     // across every pass rather than just the last one.
@@ -69,6 +69,7 @@ export class RenderSystem {
     this.effects = {};
     this.composer = null;
     this._shockTimers = [];
+    this.reducedMotion = false;
 
     this.setQuality(autoDetectQuality());
 
@@ -180,7 +181,7 @@ export class RenderSystem {
       mode: ToneMappingMode.AGX,
       resolution: 256,
       whitePoint: 6.0,
-      middleGrey: 0.44,
+      middleGray: 0.44,
       minLuminance: 0.008,
       averageLuminance: 1.0,
       adaptationRate: 1.2,
@@ -213,6 +214,7 @@ export class RenderSystem {
     composer.addPass(new EffectPass(this.camera, fx.smaa));
 
     this.effects = fx;
+    this._applyMotionPreference();
   }
 
   resize() {
@@ -228,6 +230,7 @@ export class RenderSystem {
 
   /** Punch a screen-space shockwave from a world position (quakes, boss slams). */
   shockwave(position, { amplitude = 0.045, speed = 2.6, maxRadius = 1.2, waveSize = 0.22 } = {}) {
+    if (this.reducedMotion) return;
     const s = this.effects.shock;
     if (!s) return;
     s.position.copy(position);
@@ -239,17 +242,38 @@ export class RenderSystem {
   }
 
   /** Keep the focal plane on the hero so gameplay never goes soft. */
-  setFocusDistance(metres) {
+  setFocusDistance(meters) {
     const dof = this.effects.dof;
     if (!dof) return;
     const coc = dof.cocMaterial;
-    coc.focusDistance = metres;
-    coc.focusRange = Math.max(16, metres * 1.6);
+    coc.focusDistance = meters;
+    coc.focusRange = Math.max(16, meters * 1.6);
   }
 
   /** Temporary lens warp — used by the volcano and alien tractor beam. */
   setLensDistortion(x, y) {
-    this.effects.lens?.distortion.set(x, y);
+    this.effects.lens?.distortion.set(
+      this.reducedMotion ? 0 : x,
+      this.reducedMotion ? 0 : y,
+    );
+  }
+
+  setReducedMotion(enabled) {
+    this.reducedMotion = !!enabled;
+    this._applyMotionPreference();
+  }
+
+  _applyMotionPreference() {
+    const fx = this.effects;
+    if (!fx?.chroma) return;
+    if (this.reducedMotion) {
+      fx.shock.amplitude = 0;
+      fx.lens?.distortion.set(0, 0);
+      fx.chroma.offset.set(0, 0);
+      if (fx.dof) fx.dof.blendMode.opacity.value = 0;
+    } else if (fx.dof) {
+      fx.dof.blendMode.opacity.value = 0.7;
+    }
   }
 
   setChaosGrade(chaos01) {
@@ -259,7 +283,8 @@ export class RenderSystem {
     fx.vignette.offset = 0.28 - chaos01 * 0.12;
     fx.grade.saturation = 0.14 - chaos01 * 0.24;
     fx.grade.hue = -chaos01 * 0.06;
-    fx.chroma.offset.set(0.00035 + chaos01 * 0.0022, 0.00035 + chaos01 * 0.0022);
+    const chroma = this.reducedMotion ? 0 : 0.00035 + chaos01 * 0.0022;
+    fx.chroma.offset.set(chroma, chroma);
     fx.contrast.contrast = 0.12 + chaos01 * 0.16;
   }
 

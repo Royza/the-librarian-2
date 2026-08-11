@@ -61,18 +61,21 @@ export class Level {
     this.root.add(mesh);
     this.disposables.push(geo);
 
-    // Polished stone medallions under the grand crossing and every rotunda.
-    const discs = [];
+    // Branch-specific floor landmarks make the opening camera shot readable
+    // before the player reaches any distant fixture.
+    const accents = [];
     for (const lm of this.layout.landmarks) {
-      if (lm.kind === 'desk') discs.push({ x: lm.x, z: lm.z, r: 9 });
+      if (lm.central) accents.push({ x: lm.x, z: lm.z, r: 9, central: true });
     }
     for (const z of this.layout.zones) {
       if (z.type === 'rotunda' || z.type === 'atrium') {
-        discs.push({ x: z.rect.cx, z: z.rect.cz, r: Math.min(z.rect.w, z.rect.d) * 0.46 });
+        accents.push({ x: z.rect.cx, z: z.rect.cz, r: Math.min(z.rect.w, z.rect.d) * 0.46 });
       }
     }
-    for (const d of discs) {
-      const g = new THREE.CircleGeometry(d.r, 48);
+    for (const d of accents) {
+      const g = this.theme.id === 'library' || this.theme.id === 'recordstore'
+        ? new THREE.CircleGeometry(d.r, 48)
+        : new THREE.PlaneGeometry(d.central ? d.r * 2.2 : d.r * 1.65, d.central ? d.r * 1.05 : d.r * 1.3);
       g.rotateX(-Math.PI / 2);
       g.translate(d.x, 0.008, d.z);
       const m = new THREE.Mesh(g, this.mats.accentFloor);
@@ -91,18 +94,30 @@ export class Level {
     this.root.add(mesh);
     this.disposables.push(geo);
 
-    // Coffered beams — cheap, and they give the ceiling real depth under fog.
+    // The ceiling silhouette is part of each branch's architecture: carved
+    // coffers, black rental-store grid, exposed record-shop rafters, or the
+    // supermarket's tight acoustic-tile lattice.
     const beamGeo = [];
-    const step = 8;
+    const ceilingStyle = this.theme.worldIdentity.ceiling;
+    const step = ceilingStyle === 'coffered' ? 8
+      : ceilingStyle === 'black-drop-grid' ? 4.2
+        : ceilingStyle === 'exposed-rafters' ? 6.4 : 3.2;
+    const beamW = ceilingStyle === 'coffered' ? 0.5
+      : ceilingStyle === 'exposed-rafters' ? 0.24 : 0.065;
+    const beamH = ceilingStyle === 'coffered' ? 0.55
+      : ceilingStyle === 'exposed-rafters' ? 0.34 : 0.11;
     for (let x = step; x < width; x += step) {
-      beamGeo.push(box(0.5, 0.55, depth, x, H - 0.28, depth / 2));
+      beamGeo.push(box(beamW, beamH, depth, x, H - beamH / 2, depth / 2));
     }
-    for (let z = step; z < depth; z += step) {
-      beamGeo.push(box(width, 0.55, 0.5, width / 2, H - 0.28, z));
+    const crossStep = ceilingStyle === 'exposed-rafters' ? step * 2 : step;
+    for (let z = crossStep; z < depth; z += crossStep) {
+      beamGeo.push(box(width, beamH, beamW, width / 2, H - beamH / 2, z));
     }
     const merged = mergeParts(beamGeo);
     if (merged) {
-      const bm = new THREE.Mesh(merged, this.mats.darkWood);
+      const fixtureMat = ceilingStyle === 'black-drop-grid' || ceilingStyle === 'acoustic-tile-grid'
+        ? this.mats.metal : this.mats.darkWood;
+      const bm = new THREE.Mesh(merged, fixtureMat);
       bm.receiveShadow = true;
       this.root.add(bm);
       this.disposables.push(merged);
@@ -150,6 +165,7 @@ export class Level {
     // Windows: an emissive pane, a stone surround, and a volumetric shaft.
     const paneGeos = [];
     const frameGeos = [];
+    const shaftGeos = [];
     const yaw = (w) => Math.atan2(w.normal[0], w.normal[1]);
 
     for (const w of this.layout.windows) {
@@ -176,15 +192,16 @@ export class Level {
         frameGeos.push(b);
       }
 
-      this._addWindowShaft(w, H);
+      shaftGeos.push(...this._windowShaftGeometries(w));
     }
 
     const panes = mergeParts(paneGeos);
     if (panes) {
-      const pm = new THREE.Mesh(panes, this.mats.windowPane);
+      this.windowPaneMaterial = makeWindowPaneMaterial(this.theme);
+      const pm = new THREE.Mesh(panes, this.windowPaneMaterial);
       pm.name = 'windowPanes';
       this.root.add(pm);
-      this.disposables.push(panes);
+      this.disposables.push(panes, this.windowPaneMaterial);
       this.windowPanes = pm;
     }
     const frames = mergeParts(frameGeos);
@@ -195,37 +212,47 @@ export class Level {
       this.root.add(fm);
       this.disposables.push(frames);
     }
+
+    const shafts = mergeParts(shaftGeos);
+    if (shafts) {
+      this.windowShaftMaterial = makeWindowShaftMaterial(this.theme);
+      const sm = new THREE.Mesh(shafts, this.windowShaftMaterial);
+      sm.name = 'windowLightVolumes';
+      sm.renderOrder = 5;
+      this.root.add(sm);
+      this.disposables.push(shafts, this.windowShaftMaterial);
+      this.windowShaftMesh = sm;
+    }
   }
 
-  _addWindowShaft(w, H) {
-    // Two crossed additive sheets leaning out of each window. Reads as a
-    // volumetric beam without paying for actual volumetrics.
+  _windowShaftGeometries(w) {
+    // Two softly crossed ribbons form a view-independent light volume. Their
+    // shader fades every edge and both ends, so walking through one never
+    // reveals a hard translucent plane.
     const len = Math.min(11, w.y / 0.55);
     const sheets = [];
-    for (const tilt of [0, 1]) {
-      const g = new THREE.PlaneGeometry(w.w * 1.15, len, 1, 4);
-      g.rotateX(-Math.PI / 2);
-      g.translate(0, 0, len / 2);
+    for (const tilt of [-0.075, 0.075]) {
+      const g = new THREE.PlaneGeometry(w.w * 1.12, len, 1, 6);
       const pos = g.attributes.position;
+      const uv = g.attributes.uv;
       for (let i = 0; i < pos.count; i++) {
-        const zz = pos.getZ(i);
-        const t = zz / len;
-        pos.setY(i, -zz * 0.55);
+        const t = 1 - uv.getY(i);
+        const along = t * len;
         // Splay the beam as it travels so it fans across the floor.
-        pos.setX(i, pos.getX(i) * (1 + t * 0.9));
+        const across = pos.getX(i) * (1 + t * 0.82);
+        pos.setXYZ(
+          i,
+          across * Math.cos(tilt),
+          -along * 0.55 + across * Math.sin(tilt),
+          along,
+        );
       }
-      if (tilt) g.rotateZ(0.42);
       g.computeVertexNormals();
       g.rotateY(Math.atan2(w.normal[0], w.normal[1]));
-      g.translate(w.x, w.y, w.z);
+      g.translate(w.x + w.normal[0] * 0.1, w.y, w.z + w.normal[1] * 0.1);
       sheets.push(g);
     }
-    const merged = mergeParts(sheets);
-    const m = new THREE.Mesh(merged, this.mats.shaft);
-    m.renderOrder = 5;
-    this.root.add(m);
-    this.disposables.push(merged);
-    (this.shafts ||= []).push(m);
+    return sheets;
   }
 
   _buildRugs() {
@@ -254,7 +281,7 @@ export class Level {
     const theme = this.theme;
 
     // Bucket every bay by (zone, style) — and every tier row additionally by a
-    // texture variant, so neighbouring shelves never repeat spine-for-spine.
+    // texture variant, so neighboring shelves never repeat spine-for-spine.
     const carcassBuckets = new Map();  // key -> [{run, i}]
     const rowBuckets = new Map();      // key -> [{bay, tier}]
     const glowBuckets = new Map();     // key -> [bay]
@@ -296,7 +323,7 @@ export class Level {
       const style = key.split('|')[1];
       let geo = carcassGeoCache.get(style);
       if (!geo) {
-        geo = buildCarcassGeometry(SHELF_STYLES[style]);
+        geo = buildCarcassGeometry(SHELF_STYLES[style], theme);
         carcassGeoCache.set(style, geo);
         this.disposables.push(geo);
       }
@@ -332,7 +359,7 @@ export class Level {
       let geo = rowGeoCache.get(gk);
       if (!geo) {
         const gap = tierGap(st);
-        geo = buildItemRowGeometry(BAY_WIDTH - st.sideT - 0.02, gap * ROW_HEIGHT, itemRowDepth(st, theme), variant / VARIANTS + 0.05);
+        geo = buildShelfItemRowGeometry(theme, BAY_WIDTH - st.sideT - 0.02, gap * ROW_HEIGHT, itemRowDepth(st, theme), variant / VARIANTS + 0.05);
         rowGeoCache.set(gk, geo);
         this.disposables.push(geo);
       }
@@ -346,7 +373,7 @@ export class Level {
       this.shelfMeshes.push(mesh);
     }
 
-    // --- empty-slot glow (one quad per bay, additive, colour = bay colour)
+    // --- empty-slot glow (one quad per bay, additive, color = bay color)
     const glowGeoCache = new Map();
     for (const [key, bays] of glowBuckets) {
       const style = key.split('|')[1];
@@ -406,7 +433,7 @@ export class Level {
 
       const base = ITEM_COLORS[bay.color]?.hex ?? 0x888888;
       _c.setHex(base);
-      // Lightness and a touch of hue drift so a colour block has life in it.
+      // Lightness and a touch of hue drift so a color block has life in it.
       _c.offsetHSL((h - 0.5) * 0.045, (h - 0.5) * 0.18, (h - 0.5) * 0.16);
       _c.multiplyScalar(0.8 + h * 0.42);
       mesh.instanceColor.setXYZ(ref.idx, _c.r, _c.g, _c.b);
@@ -688,6 +715,21 @@ export class Level {
     this.root.add(this.sun);
     this.root.add(this.sun.target);
 
+    // A small pooled set of real spotlights supplies the light spill that an
+    // emissive pane cannot: window frames, nearby furniture, and the floor now
+    // brighten directionally as the player approaches. Pooling keeps the
+    // shader cost bounded even though a generated floor may have many windows.
+    const windowLightCount = { low: 1, medium: 2, high: 3, ultra: 4 }[this.quality] ?? 2;
+    this.windowLightPool = [];
+    for (let i = 0; i < windowLightCount; i++) {
+      const target = new THREE.Object3D();
+      const light = new THREE.SpotLight(t.sun.color, 0, 18, 0.58, 0.76, 1.65);
+      light.castShadow = false;
+      light.target = target;
+      this.root.add(light, target);
+      this.windowLightPool.push({ light, target });
+    }
+
     // A pool of real point lights that chase the player and latch onto whatever
     // fixtures are nearest. Everywhere else, emissive geometry + the env probe
     // carry the look.
@@ -764,6 +806,7 @@ export class Level {
 
     // Re-latch point lights onto the nearest fixtures.
     this._retargetLights(px, pz);
+    this._retargetWindowLights(px, pz);
 
     // Dust drifts and stays boxed around the camera.
     const pos = this._motePos;
@@ -775,7 +818,7 @@ export class Level {
       pos[i3] += Math.sin(t * 0.4 + seed[i3 + 2]) * 0.05 * dt * 8;
       pos[i3 + 2] += Math.cos(t * 0.33 + seed[i3]) * 0.05 * dt * 8;
       if (pos[i3 + 1] > 7.5) pos[i3 + 1] = 0.2;
-      // Wrap into a box centred on the player.
+      // Wrap into a box centered on the player.
       const dx = pos[i3] - px;
       const dz = pos[i3 + 2] - pz;
       if (dx > 22) pos[i3] -= 44; else if (dx < -22) pos[i3] += 44;
@@ -791,6 +834,9 @@ export class Level {
         if (s.userData.baseOpacity === undefined) s.userData.baseOpacity = s.material.opacity;
         s.material.opacity = s.userData.baseOpacity * pulse;
       }
+    }
+    if (this.windowShaftMaterial) {
+      this.windowShaftMaterial.uniforms.uPulse.value = 0.97 + Math.sin(this.time * 0.22) * 0.03;
     }
 
     // Empty-shelf glow pulse.
@@ -828,6 +874,40 @@ export class Level {
     }
   }
 
+  _retargetWindowLights(px, pz) {
+    if (!this.windowLightPool?.length || !this.layout.windows.length) return;
+    if (this.time - (this._lastWindowScan || -1) > 0.22) {
+      this._lastWindowScan = this.time;
+      this._bestWindows = this.layout.windows
+        .map((w, index) => ({ w, index, d: (w.x - px) ** 2 + (w.z - pz) ** 2 }))
+        .filter((entry) => entry.d < 26 * 26)
+        .sort((a, b) => a.d - b.d || a.index - b.index)
+        .slice(0, this.windowLightPool.length);
+    }
+
+    const baseIntensity = 56 * Math.max(0.7, this.theme.sun.intensity);
+    for (let i = 0; i < this.windowLightPool.length; i++) {
+      const { light, target } = this.windowLightPool[i];
+      const entry = this._bestWindows?.[i];
+      if (!entry) { light.intensity = 0; continue; }
+      const { w, d } = entry;
+      const distance = Math.sqrt(d);
+      const fade = THREE.MathUtils.smoothstep(26 - distance, 0, 20);
+      light.position.set(
+        w.x + w.normal[0] * 0.38,
+        w.y + w.h * 0.08,
+        w.z + w.normal[1] * 0.38,
+      );
+      target.position.set(
+        w.x + w.normal[0] * 7.2,
+        0.12,
+        w.z + w.normal[1] * 7.2,
+      );
+      target.updateMatrixWorld();
+      light.intensity = baseIntensity * fade;
+    }
+  }
+
   dispose() {
     this.root.traverse((o) => {
       if (o.isInstancedMesh) { o.dispose?.(); }
@@ -836,6 +916,98 @@ export class Level {
     for (const d of this.disposables) d.dispose?.();
     this.disposables.length = 0;
   }
+}
+
+function makeWindowPaneMaterial(theme) {
+  const zenith = new THREE.Color(theme.envPalette?.sky ?? 0xa9d4ff).multiplyScalar(1.85);
+  const horizon = new THREE.Color(theme.sun.color)
+    .lerp(new THREE.Color(0xfff3dc), 0.58)
+    .multiplyScalar(1.55);
+  return new THREE.ShaderMaterial({
+    name: 'window-daylight-pane',
+    uniforms: {
+      uZenith: { value: zenith },
+      uHorizon: { value: horizon },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPosition;
+      void main() {
+        vUv = uv;
+        vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+        vWorldPosition = worldPosition.xyz;
+        vWorldNormal = normalize(mat3(modelMatrix) * normal);
+        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uZenith;
+      uniform vec3 uHorizon;
+      varying vec2 vUv;
+      varying vec3 vWorldNormal;
+      varying vec3 vWorldPosition;
+      void main() {
+        float vertical = smoothstep(0.04, 0.96, vUv.y);
+        vec3 daylight = mix(uHorizon, uZenith, vertical);
+        float edgeX = smoothstep(0.0, 0.13, vUv.x) * smoothstep(0.0, 0.13, 1.0 - vUv.x);
+        float edgeY = smoothstep(0.0, 0.10, vUv.y) * smoothstep(0.0, 0.10, 1.0 - vUv.y);
+        float softFrame = 0.82 + 0.18 * edgeX * edgeY;
+        vec3 toEye = normalize(cameraPosition - vWorldPosition);
+        float grazing = pow(1.0 - abs(dot(normalize(vWorldNormal), toEye)), 2.0);
+        float skyVariation = 0.96 + 0.04 * sin(vUv.y * 18.0 + vUv.x * 5.0);
+        gl_FragColor = vec4(daylight * softFrame * skyVariation * (1.0 + grazing * 0.12), 1.0);
+      }
+    `,
+    side: THREE.DoubleSide,
+    depthWrite: true,
+    toneMapped: false,
+  });
+}
+
+function makeWindowShaftMaterial(theme) {
+  const color = new THREE.Color(theme.sun.color)
+    .lerp(new THREE.Color(0xffefd2), 0.62)
+    .multiplyScalar(1.2);
+  return new THREE.ShaderMaterial({
+    name: 'window-daylight-volume',
+    uniforms: {
+      uColor: { value: color },
+      uOpacity: { value: 0.092 },
+      uPulse: { value: 1 },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      uniform float uOpacity;
+      uniform float uPulse;
+      varying vec2 vUv;
+      float hash21(vec2 p) {
+        return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+      }
+      void main() {
+        float edge = smoothstep(0.0, 0.28, vUv.x) * smoothstep(0.0, 0.28, 1.0 - vUv.x);
+        float farFade = smoothstep(0.0, 0.24, vUv.y);
+        float nearFade = 1.0 - smoothstep(0.84, 1.0, vUv.y) * 0.54;
+        float grain = mix(0.94, 1.06, hash21(floor(vUv * vec2(90.0, 150.0))));
+        float alpha = uOpacity * uPulse * edge * farFade * nearFade * grain;
+        if (alpha < 0.001) discard;
+        gl_FragColor = vec4(uColor, alpha);
+      }
+    `,
+    transparent: true,
+    depthWrite: false,
+    depthTest: true,
+    blending: THREE.AdditiveBlending,
+    side: THREE.DoubleSide,
+    toneMapped: false,
+  });
 }
 
 // --- Geometry helpers -------------------------------------------------------
@@ -899,7 +1071,7 @@ function itemRowDepth(st, theme) {
 }
 
 /** One bay of shelving: divider, plinth, boards, back, crown. */
-function buildCarcassGeometry(st) {
+export function buildCarcassGeometry(st, theme) {
   const w = BAY_WIDTH;
   const d = st.depth;
   const gap = tierGap(st);
@@ -915,7 +1087,7 @@ function buildCarcassGeometry(st) {
     if (y > st.height - st.crown + 0.001) break;
     parts.push(box(w - st.sideT, st.boardT, d - 0.02, st.sideT / 2, y + st.boardT / 2, 0));
   }
-  // Back / centre divider
+  // Back / center divider
   if (st.doubleSided) {
     parts.push(box(w, st.height - st.toe - st.crown, 0.028, 0, st.toe + (st.height - st.toe - st.crown) / 2, 0));
   } else {
@@ -925,14 +1097,44 @@ function buildCarcassGeometry(st) {
   parts.push(box(w, st.crown, d + 0.05, 0, st.height - st.crown / 2, 0));
   parts.push(box(w, st.crown * 0.35, d + 0.09, 0, st.height - st.crown * 1.1, 0));
 
+  if (theme.id === 'videostore') {
+    // Broad header marquees and thin wire ledges make these read as video racks.
+    parts.push(box(w * 0.92, Math.min(0.22, st.crown * 1.5), d + 0.12, st.sideT / 2, st.height - st.crown * 1.75, 0, 0, 0, 0, 0.025));
+    for (let t = 0; t < st.tiers; t++) {
+      const y = st.toe + (t + 0.15) * gap;
+      parts.push(box(w - st.sideT * 1.4, 0.035, 0.045, st.sideT / 2, y, d / 2 + 0.025));
+      if (st.doubleSided) parts.push(box(w - st.sideT * 1.4, 0.035, 0.045, st.sideT / 2, y, -d / 2 - 0.025));
+    }
+  } else if (theme.id === 'recordstore') {
+    // Deep browsable lips and dividers evoke square LP bins, not bookcases.
+    for (let t = 0; t < st.tiers; t++) {
+      const y = st.toe + t * gap + st.boardT + 0.055;
+      parts.push(box(w - st.sideT, 0.11, 0.06, st.sideT / 2, y, d / 2 + 0.015));
+      if (st.doubleSided) parts.push(box(w - st.sideT, 0.11, 0.06, st.sideT / 2, y, -d / 2 - 0.015));
+      parts.push(box(0.035, gap * 0.58, d * 0.88, 0.12, y + gap * 0.28, 0));
+    }
+  } else if (theme.id === 'grocery') {
+    // Metal price rails and a shallow top canopy define supermarket gondolas.
+    parts.push(box(w, 0.2, d + 0.16, 0, st.height - st.crown * 1.6, 0, 0, 0, 0, 0.025));
+    for (let t = 0; t < st.tiers; t++) {
+      const y = st.toe + t * gap + st.boardT + 0.035;
+      parts.push(box(w - st.sideT, 0.065, 0.045, st.sideT / 2, y, d / 2 + 0.035));
+      if (st.doubleSided) parts.push(box(w - st.sideT, 0.065, 0.045, st.sideT / 2, y, -d / 2 - 0.035));
+    }
+  }
+
   return mergeParts(parts);
 }
 
 /**
  * A row of items on one tier, drawn as a single box. `uOffset` slides the spine
- * strip so neighbouring rows never show the same books.
+ * strip so neighboring rows never show the same books.
  */
-function buildItemRowGeometry(w, h, d, uOffset) {
+export function buildShelfItemRowGeometry(theme, w, h, d, uOffset = 0.05) {
+  if (theme.id === 'videostore') return buildVhsRowGeometry(w, h, d);
+  if (theme.id === 'recordstore') return buildRecordRowGeometry(w, h, d);
+  if (theme.id === 'grocery') return buildGroceryRowGeometry(w, h, d);
+
   const g = new THREE.BoxGeometry(w, h, d);
   const uv = g.attributes.uv;
   // Faces are ordered +X, -X, +Y, -Y, +Z, -Z with four vertices each.
@@ -954,7 +1156,62 @@ function buildItemRowGeometry(w, h, d, uOffset) {
   uv.needsUpdate = true;
   const n = g.attributes.position.count;
   g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(n * 3).fill(1), 3));
+  g.name = 'shelf-row-bound-books';
+  g.userData.itemKind = 'book';
   return g;
+}
+
+function buildVhsRowGeometry(w, h, d) {
+  const parts = [];
+  const count = 6;
+  const pitch = w / count;
+  for (let i = 0; i < count; i++) {
+    const x = -w / 2 + pitch * (i + 0.5);
+    const lean = (i % 3 - 1) * 0.025;
+    parts.push(box(pitch * 0.78, h * (0.88 + (i % 2) * 0.06), d * 0.82, x, 0, 0, 0, 0, lean, 0.012));
+    parts.push(box(pitch * 0.5, h * 0.48, Math.max(0.012, d * 0.08), x, 0, d * 0.46, 0, 0, lean, 0.008));
+  }
+  const geometry = mergeParts(parts);
+  geometry.name = 'shelf-row-vhs-cases';
+  geometry.userData.itemKind = 'vhs';
+  return geometry;
+}
+
+function buildRecordRowGeometry(w, h, d) {
+  const parts = [];
+  const count = 3;
+  const pitch = w / count;
+  const side = Math.min(h * 0.94, pitch * 0.9);
+  for (let i = 0; i < count; i++) {
+    const x = -w / 2 + pitch * (i + 0.5);
+    const lean = (i - 1) * 0.035;
+    parts.push(box(side, side, d * 0.72, x, -h * 0.04, 0, 0, 0, lean, 0.008));
+    parts.push(cyl(side * 0.31, side * 0.31, Math.max(0.012, d * 0.06), 18, x, -h * 0.04, d * 0.4, Math.PI / 2));
+  }
+  const geometry = mergeParts(parts);
+  geometry.name = 'shelf-row-record-sleeves';
+  geometry.userData.itemKind = 'record';
+  return geometry;
+}
+
+function buildGroceryRowGeometry(w, h, d) {
+  const parts = [];
+  const pitch = w / 5;
+  for (let i = 0; i < 5; i++) {
+    const x = -w / 2 + pitch * (i + 0.5);
+    if (i % 2 === 0) {
+      const rh = h * (0.58 + i * 0.055);
+      parts.push(cyl(pitch * 0.29, pitch * 0.31, rh, 10, x, -h / 2 + rh / 2, 0));
+      parts.push(cyl(pitch * 0.31, pitch * 0.31, 0.018, 10, x, -h / 2 + rh, 0));
+    } else {
+      const bh = h * (0.76 + (i % 3) * 0.08);
+      parts.push(box(pitch * 0.68, bh, d * (0.65 + i * 0.035), x, -h / 2 + bh / 2, 0, 0, 0, (i - 2) * 0.018, 0.012));
+    }
+  }
+  const geometry = mergeParts(parts);
+  geometry.name = 'shelf-row-packaged-groceries';
+  geometry.userData.itemKind = 'grocery';
+  return geometry;
 }
 
 

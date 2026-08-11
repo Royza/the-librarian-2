@@ -7,9 +7,10 @@
 > what exists, why it exists, the exact numbers, the architecture, the balance
 > history, the bugs already fixed (do not reintroduce them), and the known gaps.
 >
-> **Status:** playable end-to-end. All systems implemented and verified. Balance
-> is tuned against a scripted bot plus design maths; it has not had human
-> playtesting at length.
+> **Status:** playable end-to-end. All systems implemented and covered by an
+> automated mechanics, lifecycle, deterministic-seed, and generator-reachability
+> suite. Balance is tuned against a scripted bot plus design math; local human
+> telemetry is now captured, but a broader playtest cohort is still needed.
 
 ---
 
@@ -21,7 +22,7 @@
 4. [The game loop](#4-the-game-loop)
 5. [Core mechanics and exact formulas](#5-core-mechanics-and-exact-formulas)
 6. [Controls](#6-controls)
-7. [Content catalogue](#7-content-catalogue)
+7. [Content catalog](#7-content-catalog)
 8. [Technology stack](#8-technology-stack)
 9. [Repository map](#9-repository-map)
 10. [Runtime architecture](#10-runtime-architecture)
@@ -58,7 +59,7 @@ than combat. You never kill anything. The antagonist is entropy.
 
 - Every run generates a brand-new library floor plan from a seed.
 - Four unlockable "branches" (levels) that completely re-skin the generator.
-- Two playable characters (cosmetic only).
+- Two playable characters with explicit reach-versus-capacity side-grades.
 - **Zero asset files.** Every texture, material, character mesh, sound effect
   and piece of music is generated in code at boot. The repository contains no
   images, models, or audio.
@@ -93,7 +94,7 @@ lines, using 16-bit-style PNG sprites and MP3 audio.
 |---|---|
 | Chaos meter, lose at 100% | Same, but a sub-linear pressure model |
 | Auto-pickup within a radius | Same (`pickupRadius`, default 2.2 m) |
-| Auto-shelve into colour-matched shelves | Same (`returnRadius`, default 2.4 m) |
+| Auto-shelve into color-matched shelves | Same (`returnRadius`, default 2.4 m) |
 | Kids grab books, drop near or carry away | Same, expanded into a 7-state FSM |
 | XP → level → choose 1 of 3 upgrades | Same, with a 20-upgrade pool |
 | Escalation events every few minutes | Director with bosses **and** disasters |
@@ -102,7 +103,9 @@ lines, using 16-bit-style PNG sprites and MP3 audio.
 
 **What is entirely new:** 3D rendering, procedural level generation, the four
 branches, the three signature powers, the four bosses, the four disasters, the
-mop/mess system, character select, procedural audio, procedural textures.
+mop/mess system, branch-specific objectives, guided first-shift training,
+character select, seeded daily shifts, local telemetry, procedural audio, and
+procedural textures.
 
 **Nothing from the original repository is used as code or assets.** It was read
 only to understand the loop.
@@ -133,12 +136,12 @@ Main menu
 4. Every item on the floor adds to the **Chaos rate**.
 5. The player walks near an item — it is **vacuumed** in automatically (flies to
    the player, no button press).
-6. The player walks near a shelf bay whose colour matches something they carry —
+6. The player walks near a shelf bay whose color matches something they carry —
    it is **filed** automatically. Filing awards XP, builds a combo, and cuts
    Chaos.
 7. XP fills a bar; each level pauses the game (time crawls to 8%) and offers a
    draft of three upgrades.
-8. The **Director** injects a boss or a disaster on a timer, alternating flavour
+8. The **Director** injects a boss or a disaster on a timer, alternating flavor
    and easing off when the player is already buried.
 9. Run ends: Chaos hits 100% (loss), health hits 0 (loss), or the timer expires
    (win). Score and lifetime XP are banked; Library Cards are paid out.
@@ -164,39 +167,59 @@ All of the following live in `src/game.js` unless noted.
 ### Chaos
 
 ```js
-// per frame, in _updateChaos(dt)
-const minute  = run.elapsed / 60;
-const perItem = 0.011 + Math.min(0.030, minute * 0.0021);
-const load    = Math.pow(floorCount, 0.8) + Math.pow(heldByKidsCount, 0.8) * 0.5;
-let rate      = load * perItem + messCount * 0.18 + bosses.chaosPressure;
+// src/systems/chaos.js, consumed by Game._updateChaos(dt)
+const t      = clamp01(run.elapsed / (15 * 60));
+const smooth = t * t * (3 - 2 * t);
+const pacing = 0.80 + smooth * 0.75;    // continuous 0.80 -> 1.55
 
-// Opening grace ramp: 35% -> 100% over the first 90 seconds
-rate *= Math.min(1, 0.35 + run.elapsed / 90 * 0.65);
+const ambient = 0.055 + t * 0.045;     // continuous 0.055 -> 0.100 / second
+const clutter = (
+  floorCount ** 0.68 + heldByKidsCount ** 0.68 * 0.40
+) * 0.025;
+const incident = messCount * 0.14 + bosses.chaosPressure;
+const rate = (ambient + clutter + incident) * pacing;
 
-if (run.chaosFrozen) rate = 0;          // "QUIET PLEASE" upgrade
-chaos += rate * dt * (1 - chaosDampening / 100);
-
-// Recovery: rewards getting on top of the mess, not just perfection
-if (messCount === 0 && floorCount < 8) {
-  const clean = 1 - floorCount / 8;
-  chaos -= (0.5 + 1.4 * clean) * dt;
-}
+if (!run.chaosFrozen && run.disasterRecoveryRemaining <= 0)
+  chaos += rate * dt * (1 - chaosDampening / 100);
 ```
 
-The `^0.8` exponent is deliberate: a large pile still hurts but does not become
-instantly unrecoverable after a tornado. Linear scaling was tried and produced
+The `^0.68` exponent is deliberate: a large pile still hurts but does not become
+instantly unrecoverable after a tornado. The smoothstep pacing curve has flat
+derivatives at both ends, eliminating the old five-minute coefficient spike.
+The stronger ambient, clutter, and closing multipliers keep a progressed build
+under real late-shift pressure while preserving the full earned Chaos-dampening
+stack. Deterministic trajectory tests target roughly 78% Chaos at closing for
+ordinary base cleanup, an overwhelmed loss around minute 8, and a visible road
+back for strong cleanup. A realistic max-dampening projection starts with Union
+Rep IV, earns one Zen Focus level about every two minutes, and reaches the true
+46% ceiling only in the closing minutes; it finishes near 45% under a larger
+backlog instead of flattening at zero. Linear clutter scaling was tried and produced
 unwinnable death spirals (see [§21](#21-balance-history-and-rationale)).
+
+Picking up an item immediately removes `0.32` Chaos. Filing removes
+`0.95 + min(combo,20) * 0.035` (0.95–1.65), so a sustained cleanup has a
+material effect. With no messes and fewer than 10 floor items, passive cleanup
+removes `0.25 + 1.15 * (1-floor/10)` Chaos/s down to a readable 5% baseline.
+Earthquake, tornado, and volcano each start a separate 60-second recovery window
+when their active phase ends: all positive Chaos sources pause, but pickup and
+filing relief remain active. When the window closes, the current floor burden —
+not the disaster's original damage — drives the resumed pressure.
 
 `maxChaos` is 100. Reaching it ends the run unless **Second Wind** (meta) is
 owned and unused, which resets Chaos to 60% once per run.
 
-### XP and levelling
+### XP and leveling
 
 ```js
-XP_BASE   = 120
-XP_GROWTH = 1.34
-xpToNext(level) = floor(120 * 1.34^(level-1))
+XP_BASE   = 180
+XP_GROWTH = 1.50
+xpToNext(level) = floor(180 * 1.50^(level-1))
 ```
+
+The first six thresholds are `180, 270, 405, 607, 911, 1366`. An engaged
+opening reaches the first draft after about eleven ordinary pickup-and-file
+returns; the geometric curve then creates wider gaps instead of consecutive
+early drafts.
 
 XP sources:
 
@@ -206,8 +229,8 @@ XP sources:
 | Item filed | `round(10 * (1 + min(combo,25) * 0.06))` |
 | Kid calmed | 28 |
 | Mess mopped | 45 |
-| Disaster survived | 320 |
-| Boss defeated | 600 |
+| Disaster survived | 140 |
+| Boss defeated | 180 |
 
 All XP is multiplied by `player.stats.xpMultiplier` (Reading Glasses, Overtime
 Pay) and by `progression.comboBonus` (Overdue Fines).
@@ -222,8 +245,8 @@ XP up to ×2.5 at combo 25, and raises the pitch of the shelve sound.
 
 | Action | Chaos change |
 |---|---|
-| Item picked up | −0.18 |
-| Item filed | −0.55 − `min(combo,20) * 0.02` |
+| Item picked up | −0.32 |
+| Item filed | −0.95 − `min(combo,20) * 0.035` |
 | Mess mopped | −2.2 |
 | Boss defeated | −12 |
 | Mess timer expires | **+8** |
@@ -254,11 +277,10 @@ regen 1.6 HP/s        regenDelay 5 s       chaosDampening 0
 dashCooldown 2.2 s    dashDistance 5.4 m   xpMultiplier 1
 ```
 
-Health is **attrition pressure, not the fail state.** Kid bumps do 3 damage (5
-from chaotic types) on a 2.2 s per-kid cooldown, only while the kid is not
-fleeing or leaving. Health regenerates 1.6/s after 5 seconds without damage.
-This is deliberate — an early build died to health far more often than to Chaos,
-which is thematically wrong.
+Health is a **secondary, recoverable fail state.** Kid bumps do 3 damage (5 from
+chaotic types) on a 2.2 s per-kid cooldown, only while the kid is not fleeing or
+leaving. Health regenerates 1.6/s after 5 seconds without damage; reaching zero
+still ends the shift. Chaos remains the primary and thematic loss condition.
 
 ### Run duration
 
@@ -277,7 +299,8 @@ which is thematically wrong.
 | `E` | Bookerang |
 | `F` | Chromatic Shush |
 | `R` | Mop (hold, when standing in a mess) |
-| Mouse | Aim the beam (ground-plane raycast) |
+| Left-mouse drag | Orbit camera yaw and pitch; pitch stays below the ceiling and vertical drag is inverted by default (configurable in Settings) |
+| Mouse move | Aim the beam (ground-plane raycast) |
 | Mouse wheel | Zoom camera (clamped so it never exits the ceiling) |
 | `Esc` | Pause in-game; back out of a menu screen |
 | `` ` `` | Debug overlay (fps, draw calls, triangles, entity counts, seed) |
@@ -291,26 +314,29 @@ which is thematically wrong.
 
 ---
 
-## 7. Content catalogue
+## 7. Content catalog
 
 ### 7.1 Branches (levels)
 
-Defined in `src/data/themes.js`. Each re-skins the entire generator: floor and
-wall materials, colour palette, lighting, ceiling height, item dimensions, prop
-sets, lamp type, music mood, and hazard items.
+Defined in `src/data/themes.js`. `worldIdentity` changes the opening landmark,
+counter, signage, perimeter treatment, ceiling structure, fixtures, rack
+silhouette, stocked-row geometry, loose-item pools, and district vocabulary in
+addition to materials, lighting, music, objectives, and hazards. A branch must
+be identifiable from the spawn crossing without relying on its floor color.
 
 | Branch | Unlocks at | Ceiling | Item size (w×h×d, m) | Notes |
 |---|---|---|---|---|
-| **The Grand Library** (`library`) | 0 XP | 16.0 m | 0.052 × 0.245 × 0.175 | Mahogany, marble, warm pendant lamps |
-| **Blockbuster Nite** (`videostore`) | 12,000 XP | 8.2 m | 0.028 × 0.19 × 0.105 | VHS, patterned carpet, cool neon |
-| **Groove Merchant Records** (`recordstore`) | 34,000 XP | 9.5 m | 0.014 × 0.31 × 0.31 | Vinyl, warm wood, orange light |
-| **MegaMart Superstore** (`grocery`) | 68,000 XP | 9.8 m | 0.09 × 0.2 × 0.09 | Lino, fluorescent strips, hazard foods |
+| **The Grand Library** (`library`) | 0 XP | 16.0 m | 0.052 × 0.245 × 0.175 | Mahogany circulation desk, coffered ceiling, arched windows, books |
+| **Blockbuster Nite** (`videostore`) | 12,000 XP or 1 win | 8.2 m | 0.028 × 0.19 × 0.105 | Rental counter, movie marquees, black drop grid, VHS cases |
+| **Groove Merchant Records** (`recordstore`) | 34,000 XP or 3 wins | 9.5 m | 0.014 × 0.31 × 0.31 | Listening counter, album walls, exposed rafters, square record sleeves |
+| **MegaMart Superstore** (`grocery`) | 68,000 XP or 6 wins | 9.8 m | 0.09 × 0.2 × 0.09 | Checkout lanes, refrigerated cases, acoustic grid, packaged food and produce |
 
-Unlocks are gated on **lifetime XP**, accumulated across all runs.
+Unlocks are granted by whichever comes first: the branch's **lifetime XP**
+milestone or its **win** milestone.
 
-### 7.2 Item colours
+### 7.2 Item colors
 
-Six or eight colour families per theme, from `ITEM_COLORS`:
+Six or eight color families per theme, from `ITEM_COLORS`:
 
 `crimson 0x7e2229` · `cobalt 0x24406e` · `forest 0x27543a` · `amber 0x9a6f22` ·
 `plum 0x4e2a5e` · `teal 0x1d5560` · `rust 0x7d4327` · `slate 0x3a4550`
@@ -330,10 +356,19 @@ independently:
 | Super Mushroom | 5% | `grow` — 1.55× scale for 12 s, −14% speed |
 | Ghost Pepper | 5% | `spicy` — +35% speed for 8 s |
 | Watermelon | 4.5% | `heavy` — −42% speed for 6 s, no sprint |
-| Egg Carton | 4% | `fragile` (flagged, no effect wired yet) |
+| Egg Carton | 4% | `fragile` — breaks into a timed mop mess if you dash into an obstacle |
 | Shaken Soda | 4% | `fizz` — particle burst + camera shake |
 
 The `videostore` also has a 5% Spilled Popcorn (`slip`).
+
+Loose items use fixed instancing pools selected at level construction. Library
+books, VHS cases, square record sleeves, ordinary grocery packages, and every
+hazard have separate geometry while retaining bounded draw calls. Grocery
+hazards are recognizable from the gameplay camera by silhouette: a curved
+banana, cap-and-stem mushroom, tapered pepper, oblong melon, open egg carton,
+and rimmed soda can. Normal item color always remains the filing color; a
+hazard's declared appearance color may override its mesh while its ground marker
+continues to show the correct destination color.
 
 ### 7.4 Shelf styles
 
@@ -384,12 +419,12 @@ permanent, unwinnable pressure.
 
 | Boss | HP | From | Patience | Chaos pressure | How you beat it |
 |---|---|---|---|---|---|
-| **Braden the Bully** | 100 | 3:00 | 105 s | 0.14 | He permanently sprints away, stripping shelves he passes (2 items / 3.4 s). Stay within 2.1 m to deal 46 dps. |
-| **A Karen** | 140 | 6:00 | 85 s | 0.16, 0.42 when within 6 m | Follows you at 2.6 m shouting, slowing you 18%. Demands 8 items of one specific colour; each one filed damages her. |
+| **Braden the Bully** | 100 | 3:00 | 105 s | 0.14 | He runs at 4.4 m/s, easing up to a 5.0 m/s cap across the shift, so a base librarian can catch him. He strips 2 items every 3.4 s; stay within 2.1 m to deal 46 dps. |
+| **A Karen** | 140 | 6:00 | 85 s | 0.16, 0.42 when within 6 m | Follows you at 2.6 m shouting, slowing you 18%. Demands 8 items of one specific color; each one filed damages her. |
 | **Poorly Percy** | 70 | 8:00 | 80 s | 0.12 + 0.3/puddle | Rare (×0.35 weight). Wanders and is sick every 7–12 s. Mop each puddle (26 s timer). Standing near him also calms him. |
 | **Field Trip Chaperone** | 180 | 12:00 | 95 s | 0.34 | Marches between shelves; every 9 s the whistle strips 3 bays × 2 items and spawns a kid. Confront within 2.2 m for 30 dps. |
 
-Defeat rewards: +600 XP, −12 Chaos, a banner, and a particle blowout. The Bully
+Defeat rewards: +180 XP, −12 Chaos, a banner, and a particle blowout. The Bully
 additionally scatters 10 items on death.
 
 ### 7.7 Disasters
@@ -398,20 +433,27 @@ additionally scatters 10 items on death.
 recover**, scaled by the player's `mitigation` and `durationScale` (from Fire
 Drill and Buildings Insurance).
 
-| Disaster | From | Weight | Duration | Behaviour |
+| Disaster | From | Weight | Duration | Behavior |
 |---|---|---|---|---|
-| **Earthquake** | 2:00 | 30 | 11 s | Camera trauma; every 0.7 s, 1–4 nearby bays lose an item; ceiling dust; occasional screen-space shockwave. ~45 items total. |
-| **Tornado** | 5:00 | 24 | 20 s | A visible 5-layer funnel wanders (biased toward the player when far). Strips 2 bays/s within 6.5 m, swirls loose items tangentially, drags the player and can make them drop everything. |
+| **Earthquake** | 2:00 | 30 | 11 s | Camera trauma; every 0.7 s it tears 5–10 books from distinct nearby shelf faces (scaled by mitigation), with ceiling dust and occasional shockwaves. |
+| **Tornado** | 5:00 | 24 | 20 s | A visible 5-layer funnel wanders (biased toward the player when far). Every 0.75 s it tears 6 books from nearby shelf faces, swirls loose items tangentially, drags the player, and can make them drop everything. |
 | **Volcano** | 9:00 | 16 | 26 s | A rock cone grows through the floor with a lava pool and ember fountain. Every 2.4 s a telegraphed ring precedes a lava bomb that strips 2 bays and scorches the floor. Standing in the pool damages you. Adds lens distortion. |
 | **Alien Invasion** | 12:00 | 14 | 30 s | A metal saucer with a glass dome and a visible pilot hovers over shelves and abducts items with a tractor beam (2 items / 1.25 s), which then rain down. |
 
-Surviving a disaster: +320 XP.
+Surviving a disaster: +140 XP.
+
+Earthquake, tornado, and volcano are natural disasters and therefore grant a
+60-second cleanup window after their active phase. The Chaos meter is held
+exactly during that window while filing continues to lower it. Alien Invasion
+is intentionally excluded: it is an encounter, not a natural disaster.
 
 ### 7.8 In-run upgrades (draft pool)
 
 `src/data/upgrades.js`. 20 upgrades. Draft weighting: an upgrade you already own
-is 3.2× more likely to appear (so builds converge), and an unowned *power* is a
-further 2× more likely (so the signature toys show up early).
+is 3.2× more likely to appear (so builds converge), and an eligible unowned
+*power* is a further 2× more likely. The Beam and Bookerang can shape an early
+build; Chromatic Shush becomes eligible only at run level 4 so its mass return
+cannot trivialize the opening.
 
 **Signature powers**
 
@@ -419,7 +461,7 @@ further 2× more likely (so the signature toys show up early).
 |---|---|---|---|
 | **Dewey Decimal Beam** | Q | 6 | range `9+3L` m · cooldown `max(1.2, 6.5·0.82^(L-1))` s · targets `2+L` · beam width `2.0+0.35L` m |
 | **Bookerang** | E | 6 | range `12+4.5L` m · cooldown `max(1.0, 5.0·0.85^(L-1))` s · files `1+L` items per throw |
-| **Chromatic Shush** | F | 7 | radius `9+4L` m · cooldown `max(4, 16·0.86^(L-1))` s · colours `min(4, 1+floor(L/2))` |
+| **Chromatic Shush** | F | 7 | first ordinary draft at run level 4 · radius `9+4L` m · cooldown `max(4, 16·0.86^(L-1))` s · colors `min(4, 1+floor(L/2))` |
 | **Cavernous Backpack** | — | 5 | `+2L` carry slots; at L3+ `returnRadius = 2.4 + 0.9(L-2)` |
 
 **Passives** — Comfy Shoes (speed ×1.08/L, max 6), Improbably Long Arms (pickup
@@ -428,8 +470,8 @@ Glasses (XP +10%/L, 5), Stair Workouts (stamina, 5), Track Coach (sprint, 4),
 Emergency Scoot (dash, 4), Laminated Badge (+25 HP/L, 4), Tea Trolley (heal 6
 every `12−2L` files, 4), "QUIET PLEASE" Sign (freeze chaos `3+L` s every `60−8L`
 s, 4), Kid Whisperer (repel + slow aura, 4), Janitor's Keys (mop speed; L3
-auto-cleans, 3), Overdue Fines (combo, 4), Cartographer's Eye (compass reach,
-minimap intel, 3), Fire Drill Training (disaster mitigation, 4).
+auto-cleans, 3), Overdue Fines (combo, 4), Cartographer's Eye (+14 m minimap
+coverage per level, 3), Fire Drill Training (disaster mitigation, 4).
 
 **How the beam interacts with kids:** the Dewey Decimal Beam and Chromatic Shush
 both **rip items out of kids' hands** and startle them. This is the intended
@@ -441,7 +483,7 @@ counterplay to carry-away.
 
 `tenure` (+2 carry/L, 5) · `goodShoes` (+4% base speed/L, 5) · `sturdySpine`
 (+20 HP/L, 5) · `espresso` (stamina, 4) · `longReach` (+0.3 m pickup/L, 4) ·
-`beamLicence` / `boomerangLicence` / `colourTheory` (start with that power at
+`beamLicense` / `boomerangLicense` / `colorTheory` (start with that power at
 level L, 3 each) · `unionRep` (chaos −4%/L, 4) · `overtime` (+8% XP and cards/L,
 5) · `rolodex` (4th draft choice, 1) · `rerolls` (L free rerolls/run, 3) ·
 `secondWind` (survive one chaos death, 1) · `insurance` (disasters −15%/L, 3) ·
@@ -452,15 +494,22 @@ Applied in `SaveData.applyMeta(player, progression)` at the start of every run.
 
 ### 7.10 Playable characters
 
-`src/data/characters.js`. **Cosmetic only** — both handle identically.
+`src/data/characters.js`. Both are side-grades applied inside the same derived
+stat rebuild used by run upgrades and permanent perks, so later draft picks do
+not erase the character trait.
 
-- **Marion**, Head Librarian — 1.74 m, glasses, hair bun, purple cardigan.
-- **Wolfe**, Weekend Shift — 1.80 m, chunk 1.05, maroon ball cap with a pale
-  badge, full beard, red plaid flannel (long sleeves), blue jeans, brown boots.
+- **Marion**, Head Librarian — 1.74 m, glasses, hair bun, purple cardigan;
+  +0.35 m pickup radius, +0.2 m return radius, −1 carrying slot.
+- **Wolfe**, Weekend Shift — 1.82 m, chunk 1.12, broad face, layered blue-gray
+  eyes, thick brows, a full salt-and-pepper beard, black flat-brim cap with a
+  white geometric mark, open charcoal/black plaid overshirt (long sleeves),
+  dark jeans, and brown-black boots; +2 carrying slots, −3% movement speed.
 
-Wolfe uses `matMap: { torso: 'flannel', armU: 'flannel', armL: 'flannel' }` and
-`shirt: 0xffffff` so the procedural plaid texture supplies the colour rather
-than a flat tint.
+Wolfe uses `matMap: { torso: 'charcoalFlannel', armU: 'charcoalFlannel',
+armL: 'charcoalFlannel' }` and `shirt: 0xffffff` so the procedural plaid texture
+supplies the color rather than a flat tint. His face, beard accents, cap logo,
+open-shirt panel, collar, and buttons are separate procedural meshes so the
+reference cues survive the elevated gameplay camera and the character portrait.
 
 The character-select screen renders the **actual in-game rig** into each card via
 `src/render/portrait.js`, so portraits cannot drift from the models. The choice
@@ -489,7 +538,7 @@ for the portrait renderer.
 
 ## 9. Repository map
 
-34 source files, ~10,850 lines.
+39 JavaScript/CSS implementation files, 13,711 lines at this revision.
 
 ```
 .
@@ -500,54 +549,58 @@ for the portrait renderer.
 ├── DESIGN.md                  this document
 └── src/
     ├── main.js                bootstraps Game, restores settings, unlocks audio
-    ├── game.js          397   orchestrator: state machine, run lifecycle, chaos,
+    ├── game.js          463   orchestrator: state machine, run lifecycle, chaos,
     │                          scoring, the fixed update order, the rAF loop
     ├── core/
     │   ├── rng.js        99   mulberry32 seeded RNG, FNV-1a string hash,
     │   │                      value noise + fbm
-    │   ├── input.js     129   keyboard/mouse/gamepad, edge detection
-    │   ├── camera.js    137   chase rig, look-ahead, trauma shake, ceiling clamp,
+    │   ├── input.js     277   keyboard remaps, gamepad, menu nav, edge detection
+    │   ├── daily.js      21   UTC daily IDs and per-branch deterministic seeds
+    │   ├── camera.js    166   chase rig, look-ahead, trauma shake, ceiling clamp,
     │   │                      screen↔world conversion
-    │   ├── audio.js     378   WebAudio synthesiser: ~25 SFX + generative score
+    │   ├── audio.js     402   WebAudio synthesizer, score, mix ducking
     │   ├── events.js     26   tiny pub/sub bus
-    │   └── save.js      121   localStorage profile, meta application, unlocks
+    │   └── save.js      223   migrated local profile, meta, daily, tutorials
     ├── data/
-    │   ├── themes.js    136   4 branches: materials, palettes, hazards, lighting
+    │   ├── themes.js    140   4 branches: materials, palettes, hazards, lighting
     │   ├── shelfStyles.js 14  6 locked carcass presets
-    │   ├── upgrades.js  187   20 in-run upgrades + weighted draft
-    │   ├── meta.js      119   16 permanent perks
-    │   └── characters.js 53   2 playable librarians
+    │   ├── upgrades.js  162   20 in-run upgrades + weighted draft
+    │   ├── meta.js      104   16 permanent perks
+    │   └── characters.js 57   2 playable librarian side-grades
     ├── world/
-    │   ├── generator.js 817   BSP floor plan, 8 district archetypes, nav grid,
-    │   │                      collider list, bay spatial index — pure data
+    │   ├── generator.js 1120  BSP floor plan, 8 district archetypes, nav grid,
+    │   │                      bay index + deterministic reachability gate
     │   ├── level.js     992   layout → instanced meshes, lighting, atmosphere,
     │   │                      shelf fill state, occlusion dither
     │   ├── props.js     370   16 furniture builders + geometry merge helpers
-    │   └── collision.js 252   circle-vs-OBB spatial hash + grid A* with
+    │   └── collision.js 256   circle-vs-OBB spatial hash + grid A* with
     │                          string-pulling
     ├── entities/
     │   ├── character.js 529   humanoid rig: skeleton, poser, geometry kit,
     │   │                      SoloCharacter (hero) + CrowdBatch (instanced kids)
-    │   ├── player.js    350   movement, stamina, dash, vacuum, auto-file, effects
+    │   ├── player.js    473   movement, derived stats, hazards, vacuum, auto-file
     │   ├── kid.js       549   7-state FSM, spawn ring, crowd rendering
-    │   └── bosses.js    516   4 boss specs + shared Boss base + manager
+    │   └── bosses.js    532   4 boss specs + shared Boss base + manager
     ├── systems/
-    │   ├── items.js     366   600-item pool, 6-state machine, instanced render
-    │   ├── powers.js    319   the three powers + QUIET PLEASE
-    │   ├── disasters.js 584   4 disasters + the mess/mop system
-    │   ├── director.js  147   difficulty beats, spawn cadence, adaptive events
-    │   ├── progression.js 155 XP, levels, draft, rerolls, Second Wind
+    │   ├── items.js     442   item pool, homing/arced returns, bay reservations
+    │   ├── powers.js    368   transformed powers + QUIET PLEASE
+    │   ├── disasters.js 602   deterministic disasters + mess/mop lifecycle
+    │   ├── director.js  157   authored opening beats + adaptive event cadence
+    │   ├── progression.js 194 stacked stats, draft, combo, Second Wind
+    │   ├── branchMechanics.js 141 four branch-specific active objectives
+    │   ├── tutorial.js  553   action training + first-encounter event briefs
+    │   ├── telemetry.js 131   local 20-run playtest evidence and export data
     │   └── fx.js        310   particles, rings, decals, beams — all pooled
     ├── render/
-    │   ├── renderer.js  275   WebGLRenderer + post stack + quality presets
+    │   ├── renderer.js  300   WebGLRenderer + post stack + quality presets
     │   ├── materials.js 212   ~30 shared PBR materials per theme
     │   ├── textures.js  674   procedural texture forge (canvas 2D → GPU)
     │   ├── environment.js 81  PMREM probe built from emissive panels
     │   └── portrait.js   97   offscreen character-select portraits
     └── ui/
-        ├── hud.js       506   meters, minimap, compass, popups, banners
-        ├── menus.js     419   all overlays; pinned back button; Esc handling
-        └── style.css    508   full stylesheet
+        ├── hud.js       811   meters, camera-relative map/compass, objectives
+        ├── menus.js     951   overlays, daily/replay, history, accessibility
+        └── style.css    686   responsive, scaled, reduced-motion UI
 ```
 
 ---
@@ -563,13 +616,14 @@ victory`.
 
 `Game._loop(now)` runs on `requestAnimationFrame`:
 
-1. Clamp `dt` to 0.25 s (prevents tunnelling after a tab switch).
+1. Clamp `dt` to 0.25 s (prevents tunneling after a tab switch).
 2. Update the FPS counter (0.5 s window).
 3. `input.pollGamepad()`.
 4. If `playing` → `_step(dt)`. If `levelup` → `_step(dt * 0.08)` (time crawls;
    reads as a beat, not a freeze). Otherwise just update the level and FX so the
    world stays alive behind menus.
-5. Update the camera, DoF focus distance, and the chaos colour grade.
+5. Consume left-drag orbit and wheel zoom, then update the camera, DoF focus
+   distance, and the chaos color grade.
 6. `hud.update(dt)`.
 7. `renderer.info.reset()` then `composer.render(dt)`.
 8. `input.endFrame()` (clears edge-triggered presses).
@@ -583,7 +637,7 @@ player.update      → movement, vacuum, auto-file
 powers.update      → aim, fire, beam visuals, QUIET PLEASE
 items.update       → physics, homing, returning
 kids.update        → FSM, steering, crowd render
-bosses.update      → boss behaviour, patience
+bosses.update      → boss behavior, patience
 disasters.update   → messes, active disasters
 director.update    → beats, spawns, events
 progression.update → Second Wind check
@@ -608,14 +662,15 @@ geometry/texture/program counts.
 `src/world/generator.js` — `generateLayout(seed, theme, options)`.
 
 **It is pure data.** It imports no three.js. This means it runs in Node for
-testing and completes in ~10 ms.
+testing. Generation plus the final reachability proof averages roughly 34 ms on
+the current development machine.
 
 ### Pipeline
 
 1. **World bounds.** Default 172 × 172 m, 6 m margin for the perimeter wall.
 
 2. **Grand boulevards.** A cross of two corridors, width 7–9.5 m, positioned
-   near (but jittered from) the centre. These exist purely for legibility: they
+   near (but jittered from) the center. These exist purely for legibility: they
    guarantee long sight lines and a memorable landmark, and they stop the
    building reading as an undifferentiated maze.
 
@@ -634,20 +689,20 @@ testing and completes in ~10 ms.
    - `furnishStacks` — parallel rows, aisle 3.0–4.0 m (2.2–2.7 dense), occasional
      mid-row breaks, aisle lighting, carts/stools/book stacks.
    - `furnishRotunda` — 2–3 concentric rings approximated by long straight arc
-     segments (~5.5 m each), a centrepiece (globe/statue/fountain/card catalog),
+     segments (~5.5 m each), a centerpiece (globe/statue/fountain/card catalog),
      a ring of columns, a grand chandelier, a round rug.
    - `furnishAtrium` — wall shelving only, open middle, island displays, a
-     centrepiece, a seating ring of armchairs, a **skylight** and light shaft.
+     centerpiece, a seating ring of armchairs, a **skylight** and light shaft.
    - `furnishReading` — perimeter shelving, a grid of tables with chairs, rugs,
      pendant lamps.
    - `furnishCarrels` — a grid of study carrels with chairs, one low shelf run.
    - `furnishChildren` — short low shelf runs at scattered angles, a story
-     circle with a playful rug and beanbags, a puppet theatre, coloured globes.
-   - `furnishGallery` — display vitrines down the centre, partition shelf walls,
+     circle with a playful rug and beanbags, a puppet theater, colored globes.
+   - `furnishGallery` — display vitrines down the center, partition shelf walls,
      spot lighting.
 
-6. **Colour regionalisation.** Each district picks a `dominant` and `secondary`
-   colour. Bays roll 55% dominant / 20% secondary / 25% any. This makes wings
+6. **Color regionalization.** Each district picks a `dominant` and `secondary`
+   color. Bays roll 55% dominant / 20% secondary / 25% any. This makes wings
    visually distinct while guaranteeing a matching shelf is rarely far away.
 
 7. **Perimeter.** Four walls, tall arched windows every 11 m (skipping corners),
@@ -655,7 +710,7 @@ testing and completes in ~10 ms.
    kept clear within 13 m of the crossing so the landmark reads), boulevard
    chandeliers, and the **circulation desk** at the crossing.
 
-8. **Rasterisation.** Every collider is an oriented bounding box, rasterised
+8. **Rasterization.** Every collider is an oriented bounding box, rasterized
    into a 1 m nav grid with a 0.42 m pad so agents don't clip corners. Borders
    are sealed.
 
@@ -664,6 +719,14 @@ testing and completes in ~10 ms.
 
 10. **Bay spatial index.** Every bay's world position and outward normal is
     computed and bucketed into an 8 m grid for `queryBays()` / `nearestBay()`.
+
+11. **Runtime reachability gate.** Before a layout is returned, the generator
+    flood-fills from spawn and proves at least 90% connected floor per zone,
+    showpiece entrances and landmarks, a same-face filing position within
+    2.4 m for every bay, and an exact collision-free 0.36 m body position at
+    every canonical shelf approach. An invalid candidate is retried with a
+    deterministic seed derived from the requested seed (up to 12 attempts), so
+    daily/copied replays remain stable without shipping rare trapped shelves.
 
 ### Output shape
 
@@ -681,7 +744,8 @@ testing and completes in ~10 ms.
   landmarks[], corridors[], walls[],
   nav (Uint8Array), navCell, navW, navD,
   spawn, crossing,
-  stats { runs, bays, capacity, zones }
+  generationAttempt,
+  stats { runs, bays, capacity, zones, generationAttempt }
 }
 ```
 
@@ -702,7 +766,7 @@ testing and completes in ~10 ms.
 - `outputColorSpace: SRGBColorSpace`
 - `toneMapping: NoToneMapping` — tone mapping happens **in post**, so bloom
   operates on linear HDR values
-- `shadowMap: PCFSoftShadowMap`
+- `shadowMap: PCFShadowMap`
 - `info.autoReset = false` — reset manually per frame so the debug overlay can
   report totals across every pass
 
@@ -757,7 +821,7 @@ This is the core of the performance story.
 - **A shelf tier is one box, not twelve books.** Each `(bay, tier)` is a single
   instance of a box whose ±Z faces sample a shared 12-spine texture and whose
   other faces sample a page-edge band baked into the top 15% of the same
-  texture. Per-instance colour, a deterministic depth recess (0.035–0.11 m),
+  texture. Per-instance color, a deterministic depth recess (0.035–0.11 m),
   height jitter (0.94–1.04×) and a lean on partly-empty rows make a run of
   shelving read as thousands of individual volumes.
 
@@ -771,7 +835,7 @@ This is the core of the performance story.
 - **Carcasses** (divider, plinth, boards, back, crown) are one instance per bay,
   per district, per style.
 
-- **Empty-slot glow** is one additive quad per bay whose instance colour encodes
+- **Empty-slot glow** is one additive quad per bay whose instance color encodes
   both the bay's hue and its emptiness — invisible when full, bright when
   stripped.
 
@@ -787,16 +851,22 @@ This is the core of the performance story.
   the player.
 - A **pool of 3–8 point lights** that re-latch every 0.25 s onto whichever
   fixtures are nearest the player, with distance fade.
+- A quality-scaled pool of **1–4 window spotlights** that re-latches to the
+  nearest windows. Each points inward and creates real directional daylight
+  spill on floors, furniture, frames, and characters instead of relying on
+  emissive geometry alone.
 - A dedicated warm **key light** on the player so the hero always reads.
 - Everything else is emissive geometry plus the probe.
 
 ### Atmosphere
 
 - `FogExp2` with density `1.6 / theme.fog.far`.
-- Additive **light shafts**: two crossed, splayed, tilted sheets per window;
-  a soft cone under each skylight.
+- **Window daylight** uses a vertical sky/horizon gradient with soft edge and
+  grazing variation instead of a flat additive white pane.
+- Additive **light shafts**: two crossed, splayed, tilted sheets per window,
+  feathered on every edge and at both ends; a soft cone under each skylight.
 - **Dust motes** — a `Points` cloud that drifts upward and wraps into a 44 m box
-  centred on the player.
+  centered on the player.
 
 ### Occlusion fade
 
@@ -813,7 +883,7 @@ extra draw call.
 ## 13. Procedural texture forge
 
 `src/render/textures.js`. Every generator paints into a 2D canvas and uploads a
-`CanvasTexture`. Results are memoised by parameter key and shared across runs.
+`CanvasTexture`. Results are memoized by parameter key and shared across runs.
 
 | Generator | Produces | Technique |
 |---|---|---|
@@ -861,7 +931,7 @@ Two proportion decisions that mattered:
 `poseSkeleton(out, proportions, anim, rootMatrix)` takes an animation state and
 writes 16 world matrices. Channels:
 
-`phase` (advances with distance travelled, so feet never skate) · `speed` ·
+`phase` (advances with distance traveled, so feet never skate) · `speed` ·
 `lean` · `armMode` (`swing | carry | overhead | reach | panic`) · `headYaw` ·
 `headPitch` · `flail` · `crouch` · `hurt` · `celebrate` · `reach` · `sit`
 
@@ -873,7 +943,7 @@ options: `hair` (`short | bun | long | spiky | pigtails | bald`), `glasses`,
 `sleeves: 'short' | 'long'`.
 
 The cap and beard are **separate geometries** from the hair so they can take
-their own colours and materials.
+their own colors and materials.
 
 ### Two consumers
 
@@ -933,7 +1003,7 @@ gameplay.
 
 Gravity −22 m/s², bounce with 0.32 restitution and spin damping, shelf-collision
 pushback, then settling flat at rest height with a random yaw. Grounded items
-get a pulsing radial floor marker in their own colour so they're findable on a
+get a pulsing radial floor marker in their own color so they're findable on a
 dark floor.
 
 `knockOff(bay, count, opts)` checks the free list **before** decrementing
@@ -975,7 +1045,7 @@ Each is a short envelope over an oscillator or filtered noise. Panning is
 derived from the sound's on-screen X position via `Game._panFor(x, z)`.
 
 **Every numeric parameter is clamped** by `num(v, fallback, min, max)` before
-reaching WebAudio — gameplay maths feeds this system directly and one NaN
+reaching WebAudio — gameplay math feeds this system directly and one NaN
 permanently poisons an audio node.
 
 ### Generative score
@@ -1001,25 +1071,29 @@ DOM overlays, not canvas. `src/ui/`.
 Chaos meter with gradient fill, tick marks, a written caption
 (`ORDERLY → A FEW STRAYS → GETTING MESSY → LOSING CONTROL → BEDLAM → TOTAL
 ANARCHY`) and a critical pulse above 78%. Timer. Level/XP bar, health, stamina,
-carry slots coloured by held item. Power buttons with radial cooldown wipes and
+carry slots colored by held item. Power buttons with radial cooldown wipes and
 level pips. Combo counter. Boss health bars with objective hints. Effect chips.
 Mop prompt with progress. Toasts, banners, and world-space XP popups projected
 each frame.
 
-**Minimap** — a static canvas of the whole floor plan (districts tinted by
-dominant colour, shelf runs as strokes) drawn once, then rotated and translated
-under a circular clip each frame, with live actors overlaid in screen space and
-the current district named beneath.
+**Minimap** — a static canvas of nearby floor geometry (districts tinted by
+dominant color, shelf runs as strokes), rotated and translated into the same
+camera-relative frame as player movement. The player arrow, loose-item shapes,
+event danger rings, and labeled boss/disaster markers are live overlays.
+Cartographer's Eye expands the coverage radius by 14 m per level.
 
 **Compass** — an arrow at screen edge pointing to the nearest bay that will
-accept something you're carrying, coloured to match. **On by default at
-cartography level 1**, because without it the colour-matching rule is
+accept something you're carrying, colored to match. **On by default at
+cartography level 1**, because without it the color-matching rule is
 undiscoverable.
 
 ### Menus (`menus.js`)
 
-Main menu, level select, character select, Staff Development shop, settings,
-loading, level-up draft, pause, results.
+Main menu, daily/seed setup, level select, character select, Staff Development
+shop, settings and remapping, local playtest history, loading, level-up draft,
+pause, and results. Pause links into the same Settings screen and retains its
+paused-run origin through nested Settings pages, so Back returns to Pause and
+the simulation never resumes behind the menu.
 
 The overlay has a **pinned back button** that lives outside the scrolling sheet
 plus Escape handling, so a long page can never strand the player.
@@ -1033,10 +1107,11 @@ plus Escape handling, so a long page can never strand the player.
 ```js
 {
   lifetimeXP, cards, runs, wins, bestScore,
-  bestByTheme: { [themeId]: score },
+  bestByTheme: { [themeId]: score }, dailyBests,
   meta: { [metaId]: level },
-  settings: { quality, music, sfx, master },
-  lastCharacter,
+  settings: { quality, music, sfx, master, tutorials, colorLabels,
+              reducedMotion, textScale, invertCameraY, keyBindings },
+  tutorial: { introComplete, seen }, lastCharacter,
   seen: {}
 }
 ```
@@ -1056,7 +1131,7 @@ Measured on the `ultra` preset in a desktop Chromium at 1280×720, mid-run with
 | Frame rate | 60 fps (vsync-locked) |
 | Draw calls | ~390–545 |
 | Triangles | ~2.1–2.6 M |
-| Layout generation | ~10 ms |
+| Layout generation + reachability proof | ~34 ms |
 | Headless simulation step | ~1.6 ms |
 | Shelf bays | ~3,300 |
 | Item pool | 600 |
@@ -1077,15 +1152,22 @@ Recording the reasoning so it isn't undone by accident:
 **Item production was ~10× too high at first.** The original earthquake dumped
 ~330 items per event, the tornado ~660, the volcano ~255, the aliens ~143, and
 the Bully stripped 80 items *per minute*. A single disaster ended any run.
-Targets now: kids produce ~16 items/min rising to ~36; each disaster ~45; each
-boss ~50–70 across its entire visit.
+Targets now: kids produce ~16 items/min rising to ~36; the earthquake and
+tornado deliberately create a much larger recovery job (5–10 books per quake
+pulse and 6 per tornado pulse), balanced by the post-event 60-second cleanup
+window; bosses produce ~50–70 across an entire visit.
 
 **Kids never stopped ransacking.** The `CARRY → drop` transition didn't check
 the remaining grab budget, so kids looped forever. Each kid now spends its
 `grab` allowance, browses between raids (2.5–5.5 s), and leaves.
 
-**Chaos was linear and lethal.** An idle player died in 76 seconds. Now it's
-`load^0.8`, with a 90-second opening grace ramp and an active recovery term.
+**Chaos was linear and lethal.** An idle player died in 76 seconds. It then
+overcorrected twice: first into a minute-five cliff, then into a meter that a
+progressed build could erase for an entire shift. The current model uses
+`load^0.68`, a 0.055→0.100/s ambient rate, and a continuous 0.80→1.55
+smoothstep across the full shift. Pickup, filing, clean-floor recovery, and
+disaster cleanup windows all provide explicit counter-pressure; deterministic
+clean, ordinary, and overwhelmed trajectories guard both extremes.
 
 **Health was the fail state.** Kid bumps at 5–8 damage on a 1.2 s cooldown with
 no regeneration killed the bot at minute 6 with Chaos at 3%. Bumps are now 3–5
@@ -1097,15 +1179,16 @@ forever — 100% in 66 seconds. Pressures were cut ~4× and every boss now has a
 patience timer.
 
 **The director was blind.** It fired disasters into an already-buried player.
-It now reads `items.floorCount`: above 55 it slows kid spawning by 70%,
-suppresses ambient shelf-tipping, and postpones headline events (up to 3 times,
-25 s each) waiting for a lull.
+It now reads `items.floorCount`: above 55 it slows kid spawning by 70% and
+postpones headline events (up to 3 times, 25 s each) waiting for a lull. Shelves
+never tip items autonomously: every loose item now traces to a kid, boss,
+disaster, explicit branch mechanic, or clearly announced training incident.
 
 **Carry-away was too common.** At 55% base, most items ended up orphaned far
 from a matching shelf. Now 30% + 1.1 points per elapsed minute, with tighter
 dump ranges.
 
-**Colours were too many and too bright.** Eight saturated families read as Lego
+**Colors were too many and too bright.** Eight saturated families read as Lego
 and gave you eight destinations to hold in your head. Now six deep, desaturated
 families per theme.
 
@@ -1123,7 +1206,7 @@ Documented so they are not reintroduced.
    SMAA each need their own `EffectPass`.
 
 2. **Softlock: unfilable items.** Bays only accepted items when
-   `filled < capacity`. You could end up carrying an armful of one colour with
+   `filled < capacity`. You could end up carrying an armful of one color with
    every matching shelf nominally full and no legal destination — the run simply
    stopped progressing. Fixed with `bayHeadroom()`: a bay accepts up to
    `capacity + 25%`. `nearestBay` search radius also raised to 140 m.
@@ -1298,6 +1381,15 @@ const test = (code) => { g.player.vx = 0; g.player.vz = 0; const a = toScreen();
 
 ### Generator validation from Node
 
+The automated suite includes a known adversarial-seed regression and strict
+per-bay collision/reachability checks. Increase the environment value for a
+long fuzz pass:
+
+```bash
+npm test
+GENERATOR_TEST_SEEDS=500 node --test test/generator-reachability.test.js
+```
+
 ```bash
 node --input-type=module -e "
 import { generateLayout } from './src/world/generator.js';
@@ -1351,26 +1443,18 @@ for (const id of Object.keys(THEMES)) {
 
 ## 25. Known gaps and next steps
 
-Ordered roughly by value.
+Ordered roughly by value. These are intentionally outside the completed
+correctness, onboarding, navigation, progression, and accessibility pass.
 
-1. **Human playtesting.** The single biggest gap. All balance is bot-derived.
-2. **The Bookerang is not a physical projectile.** It currently files carried
-   items at range instantly rather than arcing out and back. This read better in
-   practice, but a real arcing projectile with a return path would be more
-   satisfying and truer to the name.
-3. **`fragile` (Egg Carton) hazard is flagged but has no effect wired.**
-4. **The grocery `shelfWood` material** reuses the oak grain texture tinted
-   grey; a dedicated brushed-metal generator would suit the supermarket better.
-5. **No tutorial.** The compass and toasts carry the teaching load.
-6. **No audio mix ducking** — music does not duck under big SFX.
-7. **Characters are cosmetic.** Per-character passives (e.g. Marion +pickup
-   radius, Wolfe +carry slots) would deepen the choice, at the cost of needing
-   re-balancing.
-8. **Boss variety within a run.** Only one instance of each boss type can be
-   alive at once, and the roster is four.
-9. **No leaderboard / daily seed**, though the RNG is fully seeded and
-   `startRun({ seed })` accepts one, so a daily challenge is a small addition.
-10. **Mobile.** The `low` preset exists and touch input does not. Would need an
-    on-screen stick and button layer.
-11. **Bundle size** is ~956 kB (288 kB gzipped), essentially all three.js. Could
-    be trimmed with a custom three build if it ever matters.
+1. **Broader human playtesting.** Runs now capture and export a private, local
+   20-session telemetry history, but difficulty and build balance still need a
+   varied cohort of real players rather than one developer plus scripted bots.
+2. **Online competition.** Daily seeds and per-branch day records are local;
+   there is no account system, server-authoritative run validation, or shared
+   leaderboard.
+3. **Mobile touch controls.** The `low` preset exists, but touch needs an
+   on-screen stick, aim control, and accessible power-button layer.
+4. **More boss combinations.** The four readable archetypes cover the current
+   run, but additional bosses and interactions would improve long-term variety.
+5. **Bundle size.** Most of the roughly 1 MB JavaScript bundle is three.js. A
+   custom build could reduce it if download size becomes a product constraint.

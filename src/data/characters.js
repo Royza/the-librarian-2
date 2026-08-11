@@ -1,5 +1,5 @@
-// Playable librarians. Purely cosmetic — both handle identically, so picking
-// one is a wardrobe decision, not a build decision.
+// Playable librarians. Their small, explicit trade-offs create a real loadout
+// choice without turning either character into the objectively correct pick.
 
 export const CHARACTERS = {
   marion: {
@@ -8,6 +8,8 @@ export const CHARACTERS = {
     title: 'Head Librarian',
     icon: '👓',
     blurb: 'Twenty-two years in this building. She has seen every kind of child there is.',
+    trait: 'Precision Filing — longer reach, but one fewer carrying slot.',
+    bonuses: { pickupRadius: 0.35, returnRadius: 0.2, carrySlots: -1, moveSpeedMul: 1 },
     height: 1.74,
     chunk: 1.0,
     style: { hair: 'bun', glasses: true, cardigan: true, sleeves: 'short' },
@@ -25,23 +27,45 @@ export const CHARACTERS = {
     title: 'Weekend Shift',
     icon: '🧢',
     blurb: 'Flannel, beard, and strong opinions about the Dewey Decimal System.',
-    height: 1.8,
-    chunk: 1.05,
-    style: { hair: 'short', beard: 'full', hat: 'cap', sleeves: 'long' },
-    colors: {
-      skin: 0xe0a878,
-      // The shirt and sleeves render the plaid weave, so they stay white and
-      // let the texture supply the colour.
-      shirt: 0xffffff,
-      pants: 0x3f5f8c,
-      hair: 0x4a2f1c,
-      beard: 0x4a2f1c,
-      hat: 0x8e2b2b,
-      badge: 0xf0e6d2,
-      shoe: 0x3a2a20,
+    trait: 'Bulk Returns — carries two extra items, but moves 3% slower.',
+    bonuses: { pickupRadius: 0, returnRadius: 0, carrySlots: 2, moveSpeedMul: 0.97 },
+    height: 1.82,
+    chunk: 1.12,
+    // Wolfe's silhouette and face deliberately carry the reference's strongest
+    // identifying cues so he stays recognizable from both the select portrait
+    // and the elevated gameplay camera.
+    style: {
+      hair: 'underCap',
+      beard: 'saltPepper',
+      hat: 'flatCap',
+      hatLogo: 'geometric',
+      sleeves: 'long',
+      face: 'broad',
+      eyeDetail: true,
+      brows: 'thick',
+      overshirt: true,
     },
-    matMap: { torso: 'flannel', armU: 'flannel', armL: 'flannel' },
-    swatch: ['#9e2b28', '#3f5f8c', '#4a2f1c'],
+    colors: {
+      skin: 0xe4ad88,
+      // The shirt and sleeves render the charcoal plaid weave, so they stay
+      // white and let the texture supply the color.
+      shirt: 0xffffff,
+      innerShirt: 0x17191d,
+      pants: 0x263b53,
+      hair: 0x211f1e,
+      beard: 0x292421,
+      beardAccent: 0x81766d,
+      brow: 0x211f1e,
+      eyeWhite: 0xf3eee6,
+      eye: 0x8da8b4,
+      pupil: 0x11151a,
+      hat: 0x101216,
+      badge: 0xf4f1e8,
+      button: 0x8e949a,
+      shoe: 0x29231f,
+    },
+    matMap: { torso: 'charcoalFlannel', armU: 'charcoalFlannel', armL: 'charcoalFlannel' },
+    swatch: ['#17191d', '#263b53', '#81766d'],
   },
 };
 

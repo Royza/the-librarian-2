@@ -25,6 +25,9 @@ export function buildMaterials(theme) {
   for (const t of Object.values(wallTex)) if (t?.isTexture) t.repeat.set(10, 4);
 
   const spines = TX.bookSpines({ size: 512, tiles: 12 });
+  const woodenFixtures = theme.id === 'library' || theme.id === 'recordstore';
+  const paperItems = theme.id === 'library';
+  const fixtureMetalness = theme.id === 'grocery' ? 0.46 : theme.id === 'videostore' ? 0.24 : 0;
 
   const mats = {
     floor: new THREE.MeshStandardMaterial({
@@ -46,33 +49,34 @@ export function buildMaterials(theme) {
     }),
 
     wood: new THREE.MeshStandardMaterial({
-      map: wood.map,
-      normalMap: wood.normalMap || null,
+      map: woodenFixtures ? wood.map : null,
+      normalMap: woodenFixtures ? (wood.normalMap || null) : null,
       normalScale: new THREE.Vector2(0.55, 0.55),
-      roughness: 0.55,
-      metalness: 0.0,
+      color: woodenFixtures ? 0xffffff : theme.shelfWood.base,
+      roughness: woodenFixtures ? 0.55 : 0.38,
+      metalness: fixtureMetalness,
       envMapIntensity: 0.9,
       vertexColors: true,
     }),
 
     darkWood: new THREE.MeshStandardMaterial({
-      map: wood.map,
-      normalMap: wood.normalMap || null,
-      color: 0x9a8a7a,
-      roughness: 0.48,
-      metalness: 0.0,
+      map: woodenFixtures ? wood.map : null,
+      normalMap: woodenFixtures ? (wood.normalMap || null) : null,
+      color: woodenFixtures ? 0x9a8a7a : theme.shelfWood.dark,
+      roughness: woodenFixtures ? 0.48 : 0.34,
+      metalness: fixtureMetalness,
       envMapIntensity: 1.0,
       vertexColors: true,
     }),
 
-    // Item spines. Grayscale detail texture tinted by per-instance colour.
+    // Item spines. Grayscale detail texture tinted by per-instance color.
     item: new THREE.MeshStandardMaterial({
-      map: spines.map,
-      roughnessMap: spines.roughnessMap || null,
-      normalMap: spines.normalMap || null,
+      map: paperItems ? spines.map : null,
+      roughnessMap: paperItems ? (spines.roughnessMap || null) : null,
+      normalMap: paperItems ? (spines.normalMap || null) : null,
       normalScale: new THREE.Vector2(0.5, 0.5),
-      roughness: 0.72,
-      metalness: 0.0,
+      roughness: theme.id === 'videostore' ? 0.46 : theme.id === 'grocery' ? 0.58 : 0.72,
+      metalness: theme.id === 'videostore' ? 0.08 : 0.0,
       envMapIntensity: 0.85,
       vertexColors: true,
     }),
@@ -187,7 +191,7 @@ export function buildMaterials(theme) {
       polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4,
     }),
 
-    // Flannel carries its colour in the weave, so meshes using it stay white.
+    // Flannel carries its color in the weave, so meshes using it stay white.
     flannel: (() => {
       const t = TX.plaid().map.clone();
       t.needsUpdate = true;
@@ -195,6 +199,18 @@ export function buildMaterials(theme) {
       t.repeat.set(2.4, 2.4);
       return new THREE.MeshStandardMaterial({
         map: t, roughness: 0.94, metalness: 0, envMapIntensity: 0.6, vertexColors: true,
+      });
+    })(),
+
+    // Wolfe's overshirt matches the black/charcoal plaid in his reference
+    // instead of sharing the brighter red buffalo plaid.
+    charcoalFlannel: (() => {
+      const t = TX.plaid({ base: '#30343a', band: '#0d0f12', accent: '#89919a' }).map.clone();
+      t.needsUpdate = true;
+      t.wrapS = t.wrapT = THREE.RepeatWrapping;
+      t.repeat.set(2.7, 2.7);
+      return new THREE.MeshStandardMaterial({
+        map: t, roughness: 0.95, metalness: 0, envMapIntensity: 0.62, vertexColors: true,
       });
     })(),
 

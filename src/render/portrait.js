@@ -62,10 +62,11 @@ export function renderPortrait(canvas, character) {
   // Only the subject of this portrait is visible.
   for (const [id, m] of S.models) m.setVisible(id === character.id);
 
-  // A relaxed three-quarter stance, weight on one leg.
-  model.pose(0, 0, 0, 0.42, {
+  // A relaxed, nearly frontal stance keeps facial likeness readable even in
+  // the compact select cards; the slight turn still gives the rig depth.
+  model.pose(0, 0, 0, 0.22, {
     phase: 0.9, speed: 0.9, lean: 0.08, armMode: 'swing',
-    headYaw: -0.3, headPitch: 0.04, flail: 0, crouch: 0, hurt: 0, celebrate: 0,
+    headYaw: -0.12, headPitch: 0.04, flail: 0, crouch: 0, hurt: 0, celebrate: 0,
   }, 1);
 
   const w = Math.max(1, canvas.clientWidth || 220);
@@ -73,10 +74,12 @@ export function renderPortrait(canvas, character) {
   S.renderer.setSize(w, h, false);
   S.camera.aspect = w / h;
 
-  // Frame the whole figure with a little headroom.
+  // Fill the stage instead of leaving the model thumbnail-sized. The complete
+  // silhouette remains visible, while Wolfe's eyes, cap mark, beard layers,
+  // and plaid now survive at normal laptop resolution.
   const height = character.height;
-  S.camera.position.set(height * 0.34, height * 0.66, height * 3.3);
-  S.camera.lookAt(0, height * 0.52, 0);
+  S.camera.position.set(height * 0.22, height * 0.66, height * 2.5);
+  S.camera.lookAt(0, height * 0.54, 0);
   S.camera.updateProjectionMatrix();
 
   S.renderer.render(S.scene, S.camera);

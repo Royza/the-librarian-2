@@ -132,9 +132,9 @@ class Kid {
     it.state = ITEM_STATE.FREE;
     it.grounded = false;
     it.y = this.height * 0.9;
-    it.vx = (Math.random() - 0.5) * 3;
-    it.vy = 1.6 + Math.random() * 1.6;
-    it.vz = (Math.random() - 0.5) * 3;
+    it.vx = this.mgr.rng.range(-1.5, 1.5);
+    it.vy = this.mgr.rng.range(1.6, 3.2);
+    it.vz = this.mgr.rng.range(-1.5, 1.5);
     this.game.audio.play('laugh', { pan: this.game._panFor(this.x, this.z), volume: 0.4 });
   }
 
@@ -311,8 +311,8 @@ class Kid {
       this.yaw = angleLerp(this.yaw, Math.atan2(this.vx, this.vz), 1 - Math.exp(-dt * 11));
     }
 
-    // --- bump damage. Health is attrition pressure, not the fail state — the
-    // chaos meter is what you actually lose to, so bumps stay survivable.
+    // --- bump damage. Health is a secondary, recoverable fail state; Chaos is
+    // the primary pressure, so ordinary bumps stay survivable.
     const canBump = this.state !== STATE.FLEE && this.state !== STATE.LEAVE;
     if (canBump && distP < this.radius + p.radius + 0.15 && this.bumpCooldown <= 0) {
       this.bumpCooldown = 2.2;
@@ -380,7 +380,7 @@ class Kid {
     }
     if ((!this.path || this.repathTimer <= 0) && this.mgr.pathBudget > 0) {
       this.mgr.pathBudget--;
-      this.repathTimer = 0.7 + Math.random() * 0.6;
+      this.repathTimer = this.mgr.rng.range(0.7, 1.3);
       this.path = g.pathfinder.find(this.x, this.z, tx, tz);
       this.pathIndex = 0;
     }

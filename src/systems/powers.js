@@ -23,6 +23,8 @@ export class PowerSystem {
 
     this.aimPoint = new THREE.Vector3();
     this.quietActive = 0;
+    this.sortField = null;
+    this.sortFieldTick = 0;
   }
 
   setLevel(id, level) {
@@ -86,6 +88,10 @@ export class PowerSystem {
     } else {
       g.camera.screenToGround(input.mouse.ndcX, input.mouse.ndcY, this.aimPoint, 0.9);
     }
+    const trainingTarget = g.run.tutorialPowerTarget;
+    if (trainingTarget?.id === 'gravityGun' && trainingTarget.item?.active) {
+      this.aimPoint.set(trainingTarget.item.x, trainingTarget.item.y, trainingTarget.item.z);
+    }
 
     if (input.wasPressed('gravityGun')) this.fireGravityGun();
     if (input.wasPressed('bookerang')) this.fireBookerang();
@@ -93,6 +99,7 @@ export class PowerSystem {
 
     this._updateBeam(dt);
     this._updateQuietPlease(dt);
+    this._updateSortField(dt);
   }
 
   // --- Dewey Decimal Beam ---------------------------------------------------
@@ -147,6 +154,12 @@ export class PowerSystem {
       g.fx.sparkle(it.x, it.y + 0.2, it.z, ITEM_COLORS[it.color]?.hex ?? 0xffffff, 6);
     }
 
+    // Higher-level beam builds preserve a filing chain while the pulled books
+    // are in flight, turning beam → shelf into a deliberate combo setup.
+    if (this.levels.gravityGun >= 3 && grabbed.length) {
+      g.run.comboTimer = Math.max(g.run.comboTimer, (g.progression.comboTime ?? 3.2) + 1.5);
+    }
+
     this.cooldowns.gravityGun = this.stat('gravityGun', 'cooldown');
     this.beamTimer = 0.42;
     this.beamDir.set(nx, nz);
@@ -195,9 +208,9 @@ export class PowerSystem {
       if (!bay) continue;
       const d = Math.hypot(bay.wx - p.x, bay.wz - p.z);
       if (d > range) continue;
+      if (!g.items.returnTo(it, bay, { arc: true, side: thrown % 2 ? 1 : -1 })) continue;
       p.carried.splice(i, 1);
       it.y = 1.2;
-      g.items.returnTo(it, bay);
       it.spin = 26;
       thrown++;
       g.fx.sparkle(p.x, 1.2, p.z, ITEM_COLORS[it.color]?.hex ?? 0xffffff, 6);
@@ -227,7 +240,7 @@ export class PowerSystem {
     const radius = this.stat('colorPulse', 'radius');
     const colorCount = this.stat('colorPulse', 'colors');
 
-    // Target the colours that are causing the most trouble nearby.
+    // Target the colors that are causing the most trouble nearby.
     const tally = new Map();
     g.items.forEachInRadius(p.x, p.z, radius, (it) => {
       if (it.state !== ITEM_STATE.FREE && it.state !== ITEM_STATE.KID && it.state !== ITEM_STATE.CARRIED) return;
@@ -246,7 +259,7 @@ export class PowerSystem {
       const bay = nearestBay(g.layout, it.x, it.z, it.color, 140);
       if (!bay) return false;
       it.holder = null;
-      g.items.returnTo(it, bay);
+      if (!g.items.returnTo(it, bay)) return false;
       it.spin = 20;
       sent++;
       return true;
@@ -264,13 +277,19 @@ export class PowerSystem {
       if (!kid.heldItem || !colorSet.has(kid.heldItem.color)) continue;
       if (Math.hypot(kid.x - p.x, kid.z - p.z) > radius) continue;
       const it = kid.surrenderItem();
-      if (it) { send(it); kid.startle(1.8); }
+      if (it && send(it)) {
+        kid.startle(1.8);
+      } else if (it) {
+        it.state = ITEM_STATE.FREE;
+        it.grounded = false;
+        it.y = kid.height * 0.9;
+        it.vy = 1.2;
+      }
     }
     for (let i = p.carried.length - 1; i >= 0; i--) {
       const it = p.carried[i];
       if (!colorSet.has(it.color)) continue;
-      p.carried.splice(i, 1);
-      send(it);
+      if (send(it)) p.carried.splice(i, 1);
     }
 
     this.cooldowns.colorPulse = this.stat('colorPulse', 'cooldown');
@@ -285,7 +304,37 @@ export class PowerSystem {
     g.audio.play('powerup', { volume: 1 });
     g.audio.play('boom', { volume: 0.35 });
     g.hud.toast(`Shushed ${sent} ${colors.map((c) => ITEM_COLORS[c].name).join(' + ')}`);
+
+    // At level four the shockwave leaves a short-lived sorting zone. Stray
+    // items entering it are filed one at a time, creating a real build
+    // transformation instead of another percentage increase. Install it
+    // before the event so the synchronous tutorial boundary can clear every
+    // practice-only transient before scored service begins.
+    if (this.levels.colorPulse >= 4) {
+      this.sortField = { x: p.x, z: p.z, radius: radius * 0.55, t: 4 + this.levels.colorPulse * 0.75 };
+      this.sortFieldTick = 0;
+    }
     g.events.emit('power', { id: 'colorPulse', hits: sent });
+  }
+
+  _updateSortField(dt) {
+    const f = this.sortField;
+    if (!f) return;
+    const g = this.game;
+    f.t -= dt;
+    this.sortFieldTick -= dt;
+    if (f.t <= 0) { this.sortField = null; return; }
+    if (this.sortFieldTick > 0) return;
+    this.sortFieldTick = 0.28;
+    let candidate = null;
+    g.items.forEachInRadius(f.x, f.z, f.radius, (it) => {
+      if (!candidate && it.state === ITEM_STATE.FREE) candidate = it;
+    });
+    if (!candidate) return;
+    const bay = nearestBay(g.layout, candidate.x, candidate.z, candidate.color, 140);
+    if (!bay) return;
+    if (!g.items.returnTo(candidate, bay, { arc: true })) return;
+    g.fx.ring(f.x, 0.05, f.z, { r0: f.radius * 0.72, r1: f.radius, dur: 0.3, color: ITEM_COLORS[candidate.color]?.hex ?? 0xffffff });
   }
 
   // --- QUIET PLEASE ---------------------------------------------------------

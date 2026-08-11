@@ -4,6 +4,7 @@ import { makeShadowBlob, angleLerp } from './player.js';
 import { ITEM_STATE } from '../systems/items.js';
 import { queryBays } from '../world/generator.js';
 import { ITEM_COLORS } from '../data/themes.js';
+import { formatKeyCode, gamepadLabelFor } from '../core/input.js';
 
 // ---------------------------------------------------------------------------
 // Bosses. Each one attacks the loop from a different angle: the Bully makes you
@@ -27,7 +28,7 @@ export const BOSS_TYPES = {
   sickKid: {
     id: 'sickKid', name: 'Poorly Percy', title: 'clean it up',
     icon: '🤢', hp: 70, minMinute: 8, rare: true, patience: 80,
-    blurb: 'His mum said he was “fine this morning”.',
+    blurb: 'His mom said he was “fine this morning”.',
     color: 0x6fbf4a,
   },
   chaperone: {
@@ -39,6 +40,11 @@ export const BOSS_TYPES = {
 };
 
 const _res = { x: 0, z: 0, hit: null };
+
+/** The Bully stays just below an unupgraded librarian's 5 m/s walk speed. */
+export function bullyRunSpeed(elapsed = 0) {
+  return 4.4 + Math.min(0.6, Math.max(0, elapsed) / (15 * 60) * 0.6);
+}
 
 class Boss {
   constructor(mgr, type) {
@@ -87,7 +93,7 @@ class Boss {
   }
 
   damage(amount, source) {
-    if (!this.alive || this.state === 'intro') return;
+    if (!this.alive || this.state === 'intro') return false;
     this.hp = Math.max(0, this.hp - amount);
     this.anim.hurt = 1;
     this.game.fx.burst(this.x, this.height * 0.9, this.z, 10, {
@@ -95,6 +101,7 @@ class Boss {
     });
     this.game.hud.popup(this.x, this.height + 0.6, this.z, `-${Math.round(amount)}`, '#ffffff');
     if (this.hp <= 0) this.defeat();
+    return true;
   }
 
   defeat() {
@@ -107,9 +114,9 @@ class Boss {
     g.audio.play('boom', { volume: 0.5 });
     g.fx.ring(this.x, 0.1, this.z, { r0: 1, r1: 16, dur: 1.0, color: this.type.color });
     g.fx.burst(this.x, 1.4, this.z, 90, { speed: 8, color: [this.type.color, 0xffffff, 0xffd98a], life: 1.6, size: 0.26, grav: -5 });
-    g.progression.addXP(600);
+    g.progression.addXP(180);
     g.run.chaos = Math.max(0, g.run.chaos - 12);
-    g.hud.banner(`${this.type.name.toUpperCase()} DEFEATED`, '+600 XP  ·  chaos eased');
+    g.hud.banner(`${this.type.name.toUpperCase()} DEFEATED`, '+180 XP  ·  chaos eased');
     this.spec.onDefeat?.(this);
   }
 
@@ -203,7 +210,24 @@ class Boss {
   }
 }
 
-// --- Per-boss behaviour -----------------------------------------------------
+// --- Per-boss behavior -----------------------------------------------------
+
+export function applyKarenCompliance(b, bay) {
+  if (!b.alive || bay.color !== b.demandColor) return false;
+  // Intro invulnerability must not consume the visible quota. An in-flight
+  // powered return can otherwise make the card say 0 LEFT while Karen still
+  // has health and expects an invisible extra filing.
+  if (!b.damage(b.maxHp / b.demandTotal + 1, 'compliance')) return false;
+  b.demandLeft--;
+  b.game.hud.toast(`“Finally.” ${Math.max(0, b.demandLeft)} to go`);
+  return true;
+}
+
+export function mopControlLabel(input) {
+  return input?.usingGamepad
+    ? gamepadLabelFor('mop')
+    : formatKeyCode(input?.bindingFor?.('mop'));
+}
 
 const BOSS_SPECS = {
   bully: {
@@ -228,13 +252,13 @@ const BOSS_SPECS = {
         b.anim.armMode = 'swing';
       } else {
         b.dodgeT -= dt;
-        if (b.dodgeT <= 0) { b.dodgeT = 0.9 + Math.random() * 0.8; b.dodgeA = (Math.random() - 0.5) * 1.5; }
+        if (b.dodgeT <= 0) { b.dodgeT = b.mgr.rng.range(0.9, 1.7); b.dodgeA = b.mgr.rng.range(-0.75, 0.75); }
         const a = away + b.dodgeA * (1 - Math.min(1, dist / 12));
         tx = b.x + Math.sin(a) * 8;
         tz = b.z + Math.cos(a) * 8;
         b.anim.armMode = 'panic';
       }
-      const speed = 5.3 + Math.min(2, g.run.elapsed / 300);
+      const speed = bullyRunSpeed(g.run.elapsed);
       b.moveToward(tx, tz, speed, dt, dist > 22);
 
       // Every shelf he brushes past loses its top row.
@@ -271,9 +295,9 @@ const BOSS_SPECS = {
       // He drops everything he's been hoarding.
       const g = b.game;
       for (let i = 0; i < 10; i++) {
-        const a = Math.random() * Math.PI * 2;
+        const a = b.mgr.rng.range(0, Math.PI * 2);
         g.items.spawn(b.x, 1.4, b.z, g.theme.colors[i % g.theme.colors.length], {
-          vx: Math.cos(a) * 4, vy: 4 + Math.random() * 3, vz: Math.sin(a) * 4,
+          vx: Math.cos(a) * 4, vy: b.mgr.rng.range(4, 7), vz: Math.sin(a) * 4,
         });
       }
     },
@@ -293,11 +317,7 @@ const BOSS_SPECS = {
       b.demandLeft = b.demandTotal;
       b.shoutT = 0;
       b.unsub = g.events.on('shelved', ({ bay }) => {
-        if (!b.alive) return;
-        if (bay.color !== b.demandColor) return;
-        b.demandLeft--;
-        b.damage(b.maxHp / b.demandTotal + 1, 'compliance');
-        g.hud.toast(`“Finally.” ${Math.max(0, b.demandLeft)} to go`);
+        applyKarenCompliance(b, bay);
       });
     },
     dispose(b) { b.unsub?.(); },
@@ -317,9 +337,8 @@ const BOSS_SPECS = {
       // Proximity is the punishment: chaos climbs and you move like treacle.
       const near = dist < 6;
       b.chaosPressure = near ? 0.42 : 0.16;
-      if (near) {
-        p.stats.moveSpeed = p.stats.baseMoveSpeed * (1 + 0.08 * (g.progression.levels.comfyShoes || 0)) * 0.82;
-      }
+      const normalMoveSpeed = p.stats.baseMoveSpeed * (1 + 0.08 * (g.progression.levels.comfyShoes || 0));
+      p.stats.moveSpeed = normalMoveSpeed * (near ? 0.82 : 1);
 
       b.shoutT -= dt;
       if (b.shoutT <= 0) {
@@ -357,8 +376,8 @@ const BOSS_SPECS = {
 
       b.wanderT -= dt;
       if (b.wanderT <= 0) {
-        b.wanderT = 2 + Math.random() * 2;
-        const a = Math.random() * Math.PI * 2;
+        b.wanderT = b.mgr.rng.range(2, 4);
+        const a = b.mgr.rng.range(0, Math.PI * 2);
         b.wanderTarget = { x: b.x + Math.cos(a) * 8, z: b.z + Math.sin(a) * 8 };
       }
       if (b.wanderTarget) b.moveToward(b.wanderTarget.x, b.wanderTarget.z, 1.9, dt, false);
@@ -367,7 +386,7 @@ const BOSS_SPECS = {
 
       b.vomitT -= dt;
       if (b.vomitT <= 0) {
-        b.vomitT = 7 + Math.random() * 5;
+        b.vomitT = b.mgr.rng.range(7, 12);
         b.anim.hurt = 1;
         const mess = g.disasters.addMess(b.x + Math.sin(b.yaw) * 0.6, b.z + Math.cos(b.yaw) * 0.6, {
           kind: 'vomit', size: 2.4, color: 0x88b03a, timer: 26,
@@ -377,7 +396,7 @@ const BOSS_SPECS = {
         g.fx.burst(b.x + Math.sin(b.yaw) * 0.6, 0.7, b.z + Math.cos(b.yaw) * 0.6, 26, {
           speed: 2.6, color: [0x88b03a, 0xb8d06a], life: 0.9, size: 0.2, grav: -9,
         });
-        g.hud.toast('Percy has been sick. Mop it! [R]');
+        g.hud.toast(`Percy has been sick. Mop it! [${mopControlLabel(g.input)}]`);
         g.camera.addTrauma(0.12);
       }
 
@@ -409,7 +428,7 @@ const BOSS_SPECS = {
       // She marches between shelves, blowing the whistle to unleash the class.
       if (!b.marchTarget || Math.hypot(b.marchTarget.x - b.x, b.marchTarget.z - b.z) < 2) {
         const bays = queryBays(g.layout, p.x, p.z, 22);
-        const bay = bays.length ? bays[(Math.random() * bays.length) | 0] : null;
+        const bay = bays.length ? b.mgr.rng.pick(bays) : null;
         b.marchTarget = bay ? { x: bay.wx + bay.nx * 1.2, z: bay.wz + bay.nz * 1.2 } : { x: p.x, z: p.z };
       }
       b.moveToward(b.marchTarget.x, b.marchTarget.z, 2.6, dt, true);
@@ -493,8 +512,10 @@ export class BossManager {
   update(dt) {
     for (let i = this.active.length - 1; i >= 0; i--) {
       const b = this.active[i];
-      b.update(dt);
-      if (!b.alive && b.t > 0) {
+      // Defeated bosses linger visually, but their behavior (especially
+      // Karen's proximity slow) must stop on the exact defeat frame.
+      if (b.alive) b.update(dt);
+      if (!b.alive) {
         // Let the death effects breathe for a beat before removing.
         b.deadT = (b.deadT ?? 0) + dt;
         b.model.setVisible(b.deadT < 0.15);

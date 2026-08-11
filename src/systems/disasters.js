@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { queryBays } from '../world/generator.js';
 import { ITEM_STATE } from './items.js';
+import { CHAOS_BALANCE } from './chaos.js';
 import { box, cyl, sphere, mergeParts, ensureColorAttr } from '../world/props.js';
 import * as TX from '../render/textures.js';
 
@@ -15,14 +16,17 @@ export const DISASTERS = {
   earthquake: {
     id: 'earthquake', name: 'EARTHQUAKE', icon: '🌋',
     warning: 'The stacks are shaking.', minMinute: 2, weight: 30, duration: 11,
+    recoverySeconds: CHAOS_BALANCE.postDisasterReprieveSeconds,
   },
   tornado: {
     id: 'tornado', name: 'TORNADO', icon: '🌪️',
     warning: 'Something is spinning in the east wing.', minMinute: 5, weight: 24, duration: 20,
+    recoverySeconds: CHAOS_BALANCE.postDisasterReprieveSeconds,
   },
   volcano: {
     id: 'volcano', name: 'VOLCANO', icon: '🌋',
     warning: 'That was NOT there this morning.', minMinute: 9, weight: 16, duration: 26,
+    recoverySeconds: CHAOS_BALANCE.postDisasterReprieveSeconds,
   },
   aliens: {
     id: 'aliens', name: 'ALIEN INVASION', icon: '🛸',
@@ -31,6 +35,15 @@ export const DISASTERS = {
 };
 
 const _res = { x: 0, z: 0, hit: null };
+
+export function earthquakeBooksPerPulse(intensity = 1, mitigation = 1) {
+  const k = Math.max(0, Math.min(1, intensity));
+  return Math.max(1, Math.round((5 + 5 * k) * Math.max(0, mitigation)));
+}
+
+export function tornadoBooksPerPulse(mitigation = 1) {
+  return Math.max(1, Math.round(6 * Math.max(0, mitigation)));
+}
 
 export class DisasterManager {
   constructor(game) {
@@ -45,6 +58,9 @@ export class DisasterManager {
     this.mopProgress = 0;
     this.currentMess = null;
     this._built = {};
+    // Gameplay-delayed effects live on simulation time. A browser timeout can
+    // fire through pause, drafts, or even after a different run has started.
+    this._pendingImpacts = [];
   }
 
   get messCount() { return this.messes.filter((m) => m.alive).length; }
@@ -146,7 +162,9 @@ export class DisasterManager {
   }
 
   update(dt) {
+    this._updateChaosRecovery(dt);
     this._updateMesses(dt);
+    this._updatePendingImpacts(dt);
 
     for (let i = this.active.length - 1; i >= 0; i--) {
       const inst = this.active[i];
@@ -165,10 +183,56 @@ export class DisasterManager {
         this[`_end_${inst.def.id}`]?.(inst);
         this.active.splice(i, 1);
         this.game.run.disastersSurvived++;
-        this.game.progression.addXP(320);
-        this.game.hud.banner(`${inst.def.name} OVER`, '+320 XP  ·  now clean it up');
+        this.game.progression.addXP(140);
+        this._beginChaosRecovery(inst.def);
+        const recovery = inst.def.recoverySeconds
+          ? `CHAOS PAUSED ${inst.def.recoverySeconds}s  ·  clean it up`
+          : 'now clean it up';
+        this.game.hud.banner(`${inst.def.name} OVER`, `+140 XP  ·  ${recovery}`);
         this.game.events.emit('disasterEnd', { def: inst.def });
       }
+    }
+  }
+
+  _beginChaosRecovery(def) {
+    const seconds = def?.recoverySeconds || 0;
+    const g = this.game;
+    if (!seconds || !g.run) return false;
+    const floor = g.items?.floorCount || 0;
+    g.run.disasterRecoveryRemaining = Math.max(seconds, g.run.disasterRecoveryRemaining || 0);
+    g.run.disasterRecoveryStartFloor = floor;
+    g.run.disasterRecoveryEndFloor = floor;
+    g.run.disasterRecoverySource = def.id;
+    g.events?.emit?.('disasterRecoveryStart', { def, seconds, floor });
+    return true;
+  }
+
+  _updateChaosRecovery(dt) {
+    const g = this.game;
+    const r = g.run;
+    if (!r || !(r.disasterRecoveryRemaining > 0)) return false;
+    r.disasterRecoveryRemaining = Math.max(0, r.disasterRecoveryRemaining - Math.max(0, dt));
+    if (r.disasterRecoveryRemaining > 0) return false;
+
+    const floor = g.items?.floorCount || 0;
+    r.disasterRecoveryEndFloor = floor;
+    g.hud?.banner?.(
+      'CHAOS RESUMES',
+      floor > 0
+        ? `${floor} loose item${floor === 1 ? '' : 's'} are still feeding the meter.`
+        : 'The floor is clear. Keep it that way.',
+    );
+    g.events?.emit?.('disasterRecoveryEnd', { floor, source: r.disasterRecoverySource });
+    return true;
+  }
+
+  _updatePendingImpacts(dt) {
+    for (let i = this._pendingImpacts.length - 1; i >= 0; i--) {
+      const impact = this._pendingImpacts[i];
+      impact.time -= dt;
+      if (impact.time > 0) continue;
+      this._pendingImpacts.splice(i, 1);
+      this._lavaImpact(impact.x, impact.z);
     }
   }
 
@@ -192,13 +256,8 @@ export class DisasterManager {
       // Shake books out of every shelf near the player — the whole building is
       // moving, but only the reachable mess matters.
       const bays = queryBays(g.layout, g.player.x, g.player.z, 26);
-      const n = Math.round(1 + 3.5 * k * this.mitigation);
-      for (let i = 0; i < n && bays.length; i++) {
-        const bay = bays[(Math.random() * bays.length) | 0];
-        if (bay.filled <= 0) continue;
-        g.items.knockOff(bay, 1, { force: 1.4 });
-        g.level.refreshBay(bay);
-      }
+      const n = earthquakeBooksPerPulse(k, this.mitigation);
+      this._knockBooksFromBays(bays, n, { force: 1.65, perBay: 2 });
       g.audio.play('bookfall', { volume: 0.55, rate: 0.7 + Math.random() * 0.5 });
       // Ceiling dust.
       for (let i = 0; i < 14; i++) {
@@ -273,15 +332,12 @@ export class DisasterManager {
 
     // Rip books off everything it touches.
     if (!(inst._bt = (inst._bt ?? 0) - dt) || inst._bt <= 0) {
-      inst._bt = 0.95;
+      inst._bt = 0.75;
       const bays = queryBays(g.layout, d.x, d.z, d.radius);
-      let n = 0;
-      for (const bay of bays) {
-        if (bay.filled <= 0) continue;
-        g.items.knockOff(bay, 1, { force: 2 });
-        g.level.refreshBay(bay);
-        if (++n >= 2) break;
-      }
+      const n = this._knockBooksFromBays(bays, tornadoBooksPerPulse(this.mitigation), {
+        force: 2.35,
+        perBay: 2,
+      });
       if (n) g.audio.play('bookfall', { pan: g._panFor(d.x, d.z), volume: 0.5 });
     }
 
@@ -316,7 +372,7 @@ export class DisasterManager {
       g.player.vx += (Math.cos(tang) * 1.2 - Math.cos(ang) * 0.7) * pull * dt;
       g.player.vz += (Math.sin(tang) * 1.2 - Math.sin(ang) * 0.7) * pull * dt;
       g.camera.addTrauma(0.02);
-      if (pd < d.radius * 0.55 && Math.random() < dt * 2) {
+      if (pd < d.radius * 0.55 && this.rng.bool(Math.min(1, dt * 2))) {
         g.player.damage(6 * this.mitigation, 'tornado');
         g.player.dropAll();
       }
@@ -327,6 +383,23 @@ export class DisasterManager {
     const g = this.game;
     g.render.scene.remove(inst.data.mesh);
     inst.data.mesh.traverse((o) => { o.geometry?.dispose(); o.material?.dispose(); });
+  }
+
+  /** Remove a fixed budget from distinct nearby shelf faces. */
+  _knockBooksFromBays(bays, budget, { force = 1, perBay = 2 } = {}) {
+    const g = this.game;
+    const pool = bays.filter((bay) => bay.filled > 0);
+    let dropped = 0;
+    while (dropped < budget && pool.length) {
+      const index = this.rng.int(0, pool.length - 1);
+      const [bay] = pool.splice(index, 1);
+      const count = Math.min(perBay, budget - dropped, bay.filled);
+      const items = g.items.knockOff(bay, count, { force });
+      if (!items.length) continue;
+      dropped += items.length;
+      g.level.refreshBay(bay);
+    }
+    return dropped;
   }
 
   // --- VOLCANO --------------------------------------------------------------
@@ -407,18 +480,18 @@ export class DisasterManager {
     d.bombT -= dt;
     if (d.bombT <= 0 && fade > 0.5) {
       d.bombT = 2.4 / this.mitigation;
-      const a = Math.random() * Math.PI * 2;
-      const rr = 6 + Math.random() * 14;
+      const a = this.rng.range(0, Math.PI * 2);
+      const rr = this.rng.range(6, 20);
       const tx = d.x + Math.cos(a) * rr;
       const tz = d.z + Math.sin(a) * rr;
       g.fx.ring(tx, 0.06, tz, { r0: 0.3, r1: 3.2, dur: 1.1, color: 0xff5a2a });
-      setTimeout(() => this._lavaImpact(tx, tz), 1000);
+      this._pendingImpacts.push({ x: tx, z: tz, time: 1 });
     }
 
     // Standing in the lava pool is exactly as bad as it looks.
     const pd = Math.hypot(g.player.x - d.x, g.player.z - d.z);
     if (pd < d.pool.size * 0.55) {
-      if (Math.random() < dt * 3) g.player.damage(7 * this.mitigation, 'lava');
+      if (this.rng.bool(Math.min(1, dt * 3))) g.player.damage(7 * this.mitigation, 'lava');
       g.camera.addTrauma(0.03);
     }
     g.render.setLensDistortion(Math.sin(inst.t * 2) * 0.012 * fade, Math.cos(inst.t * 1.7) * 0.012 * fade);
@@ -426,7 +499,7 @@ export class DisasterManager {
 
   _lavaImpact(x, z) {
     const g = this.game;
-    if (!g.items || g.state !== 'playing') return;
+    if (!g.items || (g.state !== 'playing' && g.state !== 'levelup')) return;
     g.fx.burst(x, 0.4, z, 40, { speed: 7, color: [0xff6a22, 0xffd06a, 0x2a2320], life: 1.2, size: 0.24, grav: -12 });
     g.fx.ring(x, 0.07, z, { r0: 0.4, r1: 6, dur: 0.6, color: 0xff8a3a });
     g.audio.play('boom', { pan: g._panFor(x, z), volume: 0.55 });
@@ -518,7 +591,7 @@ export class DisasterManager {
     // Hover toward whichever shelf it fancies next.
     if (!d.targetBay || d.targetBay.filled <= 0 || d.beamT <= 0) {
       const bays = queryBays(g.layout, g.player.x, g.player.z, 24).filter((b) => b.filled > 0);
-      d.targetBay = bays.length ? bays[(Math.random() * bays.length) | 0] : null;
+      d.targetBay = bays.length ? this.rng.pick(bays) : null;
       d.beamT = 3.5;
     }
     const tx = d.targetBay ? d.targetBay.wx + d.targetBay.nx * 1.6 : g.player.x;
@@ -546,7 +619,7 @@ export class DisasterManager {
           g.level.refreshBay(bay);
           // Abducted books float up, then get dropped somewhere ridiculous.
           for (const it of taken) {
-            it.vy = 7 + Math.random() * 3;
+            it.vy = this.rng.range(7, 10);
             it.vx = (d.x - it.x) * 1.2;
             it.vz = (d.z - it.z) * 1.2;
             it.spin = 18;
@@ -566,16 +639,20 @@ export class DisasterManager {
     }
   }
 
-  _end_aliens(inst) {
+  _end_aliens(inst, { silent = false } = {}) {
     const g = this.game;
     g.render.scene.remove(inst.data.mesh, inst.data.light);
     inst.data.mesh.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
     g.fx.hideBeam(inst.data.beam);
-    g.hud.toast('The saucer leaves. It did not check anything out.');
+    if (!silent) g.hud.toast('The saucer leaves. It did not check anything out.');
   }
 
   clear() {
-    for (const inst of this.active) this[`_end_${inst.def.id}`]?.(inst);
+    this._pendingImpacts.length = 0;
+    for (const inst of this.active) {
+      // Warning-phase disasters have no meshes, decals, lights, or beams yet.
+      if (inst.phase === 'active') this[`_end_${inst.def.id}`]?.(inst, { silent: true });
+    }
     this.active.length = 0;
     for (const m of [...this.messes]) this.removeMess(m);
   }

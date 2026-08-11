@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { RenderSystem, autoDetectQuality } from './render/renderer.js';
 import { buildMaterials, disposeMaterials } from './render/materials.js';
 import { buildEnvironment } from './render/environment.js';
-import { Input } from './core/input.js';
+import { Input, isEditableTarget } from './core/input.js';
 import { AudioEngine } from './core/audio.js';
 import { EventBus } from './core/events.js';
 import { ChaseCamera } from './core/camera.js';
@@ -21,7 +21,17 @@ import { Director } from './systems/director.js';
 import { DisasterManager } from './systems/disasters.js';
 import { PowerSystem } from './systems/powers.js';
 import { Progression } from './systems/progression.js';
+import {
+  CHAOS_BALANCE,
+  chaosPressureRate,
+  cleanFloorReliefRate,
+  isChaosPaused,
+  shelveChaosRelief,
+} from './systems/chaos.js';
+import { BranchMechanics } from './systems/branchMechanics.js';
+import { RunTelemetry } from './systems/telemetry.js';
 import { SaveData } from './core/save.js';
+import { dailyId, dailySeedForDay } from './core/daily.js';
 import { HUD } from './ui/hud.js';
 import { Menus } from './ui/menus.js';
 
@@ -38,6 +48,10 @@ export const STATE = {
 
 const RUN_DURATION = 15 * 60;   // one shift: fifteen minutes of children
 
+export function presentationFxDelta(state, dt) {
+  return state === STATE.PAUSED ? 0 : dt;
+}
+
 export class Game {
   constructor(canvas, uiRoot) {
     this.canvas = canvas;
@@ -49,6 +63,7 @@ export class Game {
     this.input = new Input(canvas);
     this.audio = new AudioEngine();
     this.camera = new ChaseCamera(this.render.camera);
+    this.applyCameraSettings();
 
     this.state = STATE.BOOT;
     this.clock = 0;
@@ -64,6 +79,8 @@ export class Game {
 
     this.run = null;
     this.level = null;
+    this.branchMechanics = null;
+    this.telemetry = null;
 
     this.events.on('*', (type, payload) => this.hud?.onEvent?.(type, payload));
 
@@ -74,15 +91,23 @@ export class Game {
 
   _bindGlobalKeys() {
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'Escape') {
+      if (e.repeat) return;
+      if (e.code === 'Escape' || e.code === 'KeyP') {
         if (this.state === STATE.PLAYING) this.pause();
-        else if (this.state === STATE.PAUSED) this.resume();
+        // A paused Settings sub-screen owns Escape/Back. Only the actual pause
+        // screen may resume the simulation from the pause hotkey.
+        else if (this.state === STATE.PAUSED && this.menus.current === 'pause') this.resume();
       }
-      if (e.code === 'KeyM') this.audio.mute(this.audio.enabled);
+      if (e.code === 'KeyM' && !isEditableTarget(e.target)) this.audio.mute(this.audio.enabled);
     });
   }
 
   // --- lifecycle ------------------------------------------------------------
+
+  /** Apply persistent camera preferences immediately without resetting orbit. */
+  applyCameraSettings() {
+    this.camera.setInvertY(!!this.save.settings.invertCameraY);
+  }
 
   async showMenu() {
     this.state = STATE.MENU;
@@ -92,9 +117,13 @@ export class Game {
     this.audio.setIntensity(0.1);
   }
 
-  async startRun({ themeId = 'library', seed = null, characterId = null } = {}) {
+  async startRun({ themeId = 'library', seed = null, characterId = null, challenge = null, dailyDay: requestedDailyDay = null } = {}) {
+    // Result-only announcements belong to exactly one run. Clear them before
+    // training or an unscored abort can inherit an earlier branch unlock.
+    this.save.lastCardsEarned = 0;
+    this.save.lastUnlockedTheme = null;
     this.state = STATE.LOADING;
-    this.menus.showLoading();
+    this.menus.showLoading(themeId);
     await frame(); await frame();
 
     this.disposeRun();
@@ -103,7 +132,13 @@ export class Game {
     this.theme = theme;
     this.characterId = characterId || this.save.data.lastCharacter || DEFAULT_CHARACTER;
     this.save.setLastCharacter(this.characterId);
-    const seedValue = seed ?? `${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const isDaily = challenge === 'daily';
+    // A results-screen retry belongs to the daily challenge it started on,
+    // even if UTC midnight passes while the results are open.
+    const dailyDay = isDaily ? (requestedDailyDay || dailyId()) : null;
+    const seedValue = seed ?? (isDaily
+      ? dailySeedForDay(themeId, dailyDay)
+      : `${Date.now()}-${Math.floor(Math.random() * 1e9)}`);
     this.seed = seedValue;
     this.rng = new RNG(seedValue);
 
@@ -132,11 +167,12 @@ export class Game {
     this.powers = new PowerSystem(this);
     this.disasters = new DisasterManager(this);
     this.progression = new Progression(this);
-    this.director = new Director(this);
 
     this.run = {
       duration: RUN_DURATION,
       elapsed: 0,
+      sessionElapsed: 0,
+      trainingElapsed: 0,
       chaos: 0,
       maxChaos: 100,
       peakChaos: 0,
@@ -148,21 +184,37 @@ export class Game {
       combo: 0,
       comboTimer: 0,
       bestCombo: 0,
+      disasterRecoveryRemaining: 0,
+      disasterRecoveryStartFloor: 0,
+      disasterRecoveryEndFloor: 0,
       xpEarned: 0,
       score: 0,
+      challenge,
+      isDaily,
+      dailyDay,
+      tutorialActive: false,
     };
 
     // Apply meta upgrades bought between runs.
     this.save.applyMeta(this.player, this.progression);
+    this.branchMechanics = new BranchMechanics(this);
+    this.telemetry = new RunTelemetry(this);
+    // Director.begin() applies starting licenses and head-start drafts, so it
+    // must be constructed only after permanent progression is installed.
+    this.director = new Director(this);
 
-    this.camera.yaw = Math.PI * 0.25;
+    // Settings can change from the pause overlay while this long-lived camera
+    // survives across runs, so reapply the saved preference at each boundary.
+    this.applyCameraSettings();
+    this.camera.setContainment(this.layout);
     this.camera.setCeiling(theme.ceilingHeight);
-    this.camera.update(0.016, this.player, { x: 0, z: 0 }, { snap: true });
+    this.camera.reset(this.player);
 
     // Warm the shader cache before the first frame so we don't hitch on entry.
     this.render.renderer.compile(this.render.scene, this.render.camera);
 
     this.state = STATE.PLAYING;
+    this.input.enabled = true;
     this.clock = 0;
     this.timeScale = 1;
     this.menus.hideAll();
@@ -174,6 +226,8 @@ export class Game {
   }
 
   disposeRun() {
+    this.telemetry?.dispose();
+    this.branchMechanics?.dispose();
     this.player?.dispose();
     this.kids?.dispose();
     this.bosses?.dispose();
@@ -185,6 +239,11 @@ export class Game {
     this.player = null; this.kids = null; this.bosses = null;
     this.powers = null; this.disasters = null; this.items = null;
     this.fx = null; this.level = null; this.director = null;
+    this.telemetry = null; this.branchMechanics = null;
+    // The renderer and chase camera outlive a run. Remove all disaster/chaos
+    // presentation before the menu or the next floor becomes visible.
+    this.render.setLensDistortion(0, 0);
+    this.render.setChaosGrade(0);
     // Textures are cached and shared across runs; the materials wrapping them
     // are not, so they have to go with the level.
     if (this.mats) { disposeMaterials(this.mats); this.mats = null; }
@@ -200,6 +259,9 @@ export class Game {
 
   resume() {
     if (this.state !== STATE.PAUSED) return;
+    // The global keyboard handler and the polled action see the same keydown.
+    // Consume it so Escape/P cannot immediately reopen pause next frame.
+    this.input.consumePressed('pause');
     this.state = STATE.PLAYING;
     this.input.enabled = true;
     this.menus.hideAll();
@@ -208,19 +270,30 @@ export class Game {
 
   endRun(won, reason) {
     if (this.state === STATE.GAMEOVER || this.state === STATE.VICTORY) return;
+    const trainingOnly = !!this.run?.tutorialActive;
     this.state = won ? STATE.VICTORY : STATE.GAMEOVER;
     this.input.enabled = false;
+    this.progression?.cancelDraft();
+    this.menus.hideAll();
+    if (trainingOnly) {
+      this.hud?.tutorial?.prepareRunEnd?.();
+      this.run.unscoredTraining = true;
+    }
     this.audio.stopMusic();
     this.audio.play(won ? 'win' : 'lose');
 
     const r = this.run;
-    r.score = Math.round(
+    r.score = trainingOnly ? 0 : Math.round(
       r.shelved * 12 + r.pickedUp * 3 + r.kidsCalmed * 25 +
       r.bossesBeaten * 400 + r.disastersSurvived * 250 +
       r.elapsed * 2 + (won ? 3000 : 0) + r.bestCombo * 30,
     );
-    const gained = Math.round(r.xpEarned + (won ? 2500 : 0));
-    this.save.addLifetime(gained, r.score, this.theme.id, won);
+    const gained = trainingOnly ? 0 : Math.round(r.xpEarned + (won ? 2500 : 0));
+    if (!trainingOnly) {
+      this.telemetry?.finish(reason, won);
+      this.save.addLifetime(gained, r.score, this.theme.id, won, this.progression.cardMultiplier);
+      if (r.isDaily) this.save.recordDaily(r.dailyDay, this.theme.id, r.score, won);
+    }
     this.hud.hide();
     this.menus.showResults(won, reason, r, gained);
     this.events.emit('runEnd', { won, reason, run: r });
@@ -235,7 +308,7 @@ export class Game {
 
   onItemPickedUp(it) {
     this.run.pickedUp++;
-    this.run.chaos = Math.max(0, this.run.chaos - 0.18);
+    this.run.chaos = Math.max(0, this.run.chaos - CHAOS_BALANCE.pickupRelief);
     this.progression.addXP(3);
   }
 
@@ -243,9 +316,9 @@ export class Game {
     const r = this.run;
     r.shelved++;
     r.combo++;
-    r.comboTimer = 3.2;
+    r.comboTimer = this.progression.comboTime;
     r.bestCombo = Math.max(r.bestCombo, r.combo);
-    r.chaos = Math.max(0, r.chaos - 0.55 - Math.min(r.combo, 20) * 0.02);
+    r.chaos = Math.max(0, r.chaos - shelveChaosRelief(r.combo));
 
     const mult = 1 + Math.min(r.combo, 25) * 0.06;
     this.progression.addXP(Math.round(10 * mult));
@@ -256,13 +329,20 @@ export class Game {
     this.level.refreshBay(bay);
     this.hud.popup(bay.wx, bay.run.height * 0.7, bay.wz, r.combo > 1 ? `+${Math.round(10 * mult)} ×${r.combo}` : `+10`, '#ffd77a');
     this.events.emit('shelved', { bay, combo: r.combo });
+    if (!r.tutorialActive) this.branchMechanics?.onShelved(it, bay);
   }
 
   onBayChanged(bay) { this.level.refreshBay(bay); }
 
   addChaos(amount) {
+    // A cleanup window is a true reprieve: direct incident penalties cannot
+    // sneak around the per-frame rate pause. Quiet Please remains a separate
+    // effect and either one can independently hold Chaos.
+    if (amount > 0 && isChaosPaused(this.run)) return 0;
     const damp = 1 - (this.player?.stats.chaosDampening ?? 0) / 100;
-    this.run.chaos = Math.min(this.run.maxChaos, this.run.chaos + amount * damp);
+    const before = this.run.chaos;
+    this.run.chaos = Math.min(this.run.maxChaos, before + amount * damp);
+    return this.run.chaos - before;
   }
 
   /** Stereo pan for a world position, from its horizontal place on screen. */
@@ -272,7 +352,7 @@ export class Game {
     cam.updateMatrixWorld();
     cam.matrixWorldInverse.copy(cam.matrixWorld).invert();
     _panVec.project(cam);
-    // Behind the camera the projection flips; treat that as dead centre.
+    // Behind the camera the projection flips; treat that as dead center.
     if (!Number.isFinite(_panVec.x) || _panVec.z > 1) return 0;
     return Math.max(-1, Math.min(1, _panVec.x));
   }
@@ -292,7 +372,11 @@ export class Game {
       this._frames = 0; this._fpsTime = 0;
     }
 
+    const stateBeforeInput = this.state;
     this.input.pollGamepad();
+    // Menus may synchronously resume a paused game from the same Start edge.
+    // Only a press that began while already playing is allowed to pause.
+    if (stateBeforeInput === STATE.PLAYING && this.state === STATE.PLAYING && this.input.wasPressed('pause')) this.pause();
 
     if (this.state === STATE.PLAYING) {
       this._step(dt * this.timeScale);
@@ -301,15 +385,22 @@ export class Game {
       this._step(dt * 0.08);
     } else if (this.level && this.player) {
       this.level.update(dt, this.player, this.render.camera.position);
-      this.fx?.update(dt);
+      // Keep warning rings rendered during pause without aging them past the
+      // simulation-time hazard they telegraph.
+      this.fx?.update(presentationFxDelta(this.state, dt));
     }
 
     if (this.level) {
+      // The canvas owns camera gestures only during live play. Menu overlays,
+      // pause, loading, and upgrade cards retain normal left-click behavior.
+      if (this.state === STATE.PLAYING && this.input.enabled) {
+        this.camera.orbit(this.input.mouse.dragX, this.input.mouse.dragY);
+        if (this.input.mouse.wheel) this.camera.zoom(this.input.mouse.wheel);
+      }
       this.camera.update(dt, this.player ?? { x: 0, z: 0 }, { x: this.player?.vx ?? 0, z: this.player?.vz ?? 0 });
       this.render.setFocusDistance(this.camera.distance);
       this.render.setChaosGrade(this.run ? this.run.chaos / this.run.maxChaos : 0);
     }
-    if (this.input.mouse.wheel) this.camera.zoom(this.input.mouse.wheel);
 
     this.hud?.update(dt);
     this.render.renderer.info.reset();
@@ -320,7 +411,11 @@ export class Game {
   _step(dt) {
     const r = this.run;
     this.clock += dt;
-    r.elapsed += dt;
+    r.sessionElapsed += dt;
+    // Guided training is an onboarding prologue, not part of the scored
+    // fifteen-minute shift. New players always receive the full run afterward.
+    if (r.tutorialActive) r.trainingElapsed += dt;
+    else r.elapsed += dt;
 
     if (r.comboTimer > 0) {
       r.comboTimer -= dt;
@@ -334,12 +429,16 @@ export class Game {
     this.bosses.update(dt);
     this.disasters.update(dt);
     this.director.update(dt);
-    this.progression.update(dt);
+    this.branchMechanics?.update(dt);
     this.fx.update(dt);
     this.level.update(dt, this.player, this.render.camera.position);
     this.items.render(this.render.camera);
 
     this._updateChaos(dt);
+    // Second Wind and other run-ending guards must see Chaos added by this
+    // frame before the terminal checks below.
+    this.progression.update(dt);
+    this.telemetry?.update(dt);
 
     this.audio.setIntensity(Math.min(1, r.chaos / r.maxChaos * 1.15 + (this.bosses.active.length ? 0.3 : 0)));
 
@@ -354,28 +453,30 @@ export class Game {
     const held = this.items.looseCount - floor;
     const messes = this.disasters.messCount;
 
-    // Pressure grows sub-linearly with the size of the mess. A big pile still
-    // hurts, but it doesn't become unrecoverable the moment a tornado passes —
-    // the player always has a road back if they start filing.
-    const minute = r.elapsed / 60;
-    const perItem = 0.011 + Math.min(0.030, minute * 0.0021);
-    const load = Math.pow(floor, 0.8) + Math.pow(held, 0.8) * 0.5;
-    let rate = load * perItem + messes * 0.18;
-    rate += this.bosses.chaosPressure;
+    // Quiet Please and the post-disaster cleanup window are independent. While
+    // either is active the meter holds exactly; picking up and filing can still
+    // lower it, which is the point of the one-minute disaster reprieve.
+    if (!isChaosPaused(r)) {
+      const rate = chaosPressureRate({
+        elapsed: r.elapsed,
+        floor,
+        held,
+        messes,
+        bossPressure: this.bosses.chaosPressure,
+      });
+      if (rate > 0) this.addChaos(rate * dt);
 
-    // Opening grace: the first ninety seconds ease you in rather than punishing
-    // the time it takes to work out what the colours mean.
-    rate *= Math.min(1, 0.35 + r.elapsed / 90 * 0.65);
-    if (r.chaosFrozen) rate = 0;
-
-    if (rate > 0) this.addChaos(rate * dt);
-    else if (r.chaos > 0) r.chaos = Math.max(0, r.chaos - 0.6 * dt);
-
-    // Getting on top of the mess is rewarded, not just perfection — the meter
-    // has to visibly move while you're clawing back or it reads as hopeless.
-    if (messes === 0 && floor < 8) {
-      const clean = 1 - floor / 8;
-      r.chaos = Math.max(0, r.chaos - (0.5 + 1.4 * clean) * dt);
+      // Getting on top of the mess is rewarded, not just perfection — the meter
+      // visibly retreats before the room is completely pristine. Recovery stops
+      // at a small readable baseline so a tidy opening does not pin the meter at
+      // zero and recreate the old "nothing happens for minutes" problem.
+      const cleanRelief = cleanFloorReliefRate(floor, messes);
+      if (cleanRelief > 0 && r.chaos > CHAOS_BALANCE.cleanFloorChaosFloor) {
+        r.chaos = Math.max(
+          CHAOS_BALANCE.cleanFloorChaosFloor,
+          r.chaos - cleanRelief * dt,
+        );
+      }
     }
     r.peakChaos = Math.max(r.peakChaos, r.chaos);
   }

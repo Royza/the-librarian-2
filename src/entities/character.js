@@ -34,7 +34,7 @@ function proportions(h, chunk = 1) {
     legR: h * 0.058 * chunk,
     hipY: legU + legL + h * 0.02,
     legU, legL, torso, neck, headR, armU, armL,
-    // Shoulders sit just outside the ribcage, not on its centreline.
+    // Shoulders sit just outside the ribcage, not on its centerline.
     shoulderW: torsoW * 0.5 + limbR * 0.82,
     hipW: h * 0.062 * chunk,
     torsoW,
@@ -70,7 +70,7 @@ const _mtmp = new THREE.Matrix4();
 /**
  * Fill `out` (array of 16 Matrix4) with world transforms for one character.
  *
- * `anim` drives everything: phase advances with distance travelled so feet
+ * `anim` drives everything: phase advances with distance traveled so feet
  * never skate, and the extra channels (lean, flail, hurt) layer on top.
  */
 export function poseSkeleton(out, p, anim, rootMatrix) {
@@ -174,9 +174,21 @@ export function poseSkeleton(out, p, anim, rootMatrix) {
 export function buildBodyGeometry(p, style = {}) {
   const {
     hair = 'short', glasses = false, apron = false, cardigan = false,
-    antenna = false, hat = null, beard = null, sleeves = 'short',
+    antenna = false, hat = null, hatLogo = null, beard = null,
+    sleeves = 'short', face = null, eyeDetail = false, brows = null,
+    overshirt = false,
   } = style;
   const g = {};
+
+  // Scale around the primitive's own origin before translating. Scaling a
+  // pre-translated BufferGeometry also scales its offset and was the reason the
+  // old cap crown sat too low over Wolfe's eyes.
+  const ellipsoid = (radius, sx, sy, sz, x, y, z, wseg = 18, hseg = 14) => {
+    const geo = sphere(radius, wseg, hseg);
+    geo.scale(sx, sy, sz);
+    geo.translate(x, y, z);
+    return geo;
+  };
 
   g.hips = mergeParts([
     box(p.torsoW * 0.92, p.h * 0.1, p.torsoD * 1.05, 0, p.h * 0.03, 0, 0, 0, 0, p.h * 0.03),
@@ -194,21 +206,70 @@ export function buildBodyGeometry(p, style = {}) {
   if (apron) torsoParts.push(box(p.torsoW * 0.8, p.torso * 0.7, p.torsoD * 0.2, 0, p.torso * 0.35, p.torsoD * 0.55));
   g.torso = mergeParts(torsoParts);
 
+  if (overshirt) {
+    // A dark tee visible between two open plaid fronts makes this read as an
+    // overshirt rather than a one-piece uniform, especially in the portrait.
+    g.innerShirt = mergeParts([
+      box(p.torsoW * 0.44, p.torso * 0.78, p.torsoD * 0.08,
+        0, p.torso * 0.46, p.torsoD * 0.54, 0, 0, 0, p.h * 0.012),
+    ]);
+    g.collar = mergeParts([
+      box(p.torsoW * 0.34, p.torso * 0.13, p.torsoD * 0.1,
+        -p.torsoW * 0.13, p.torso * 0.81, p.torsoD * 0.57,
+        0, 0, -0.43, p.h * 0.008),
+      box(p.torsoW * 0.34, p.torso * 0.13, p.torsoD * 0.1,
+        p.torsoW * 0.13, p.torso * 0.81, p.torsoD * 0.57,
+        0, 0, 0.43, p.h * 0.008),
+    ]);
+    const buttons = [];
+    for (const sx of [-1, 1]) for (let i = 0; i < 3; i++) {
+      buttons.push(cyl(p.h * 0.012, p.h * 0.012, p.h * 0.014, 8,
+        sx * p.torsoW * 0.285, p.torso * (0.63 - i * 0.19), p.torsoD * 0.585,
+        Math.PI / 2));
+    }
+    g.buttons = mergeParts(buttons);
+  }
+
   const r = p.headR;
+  const broadFace = face === 'broad';
   const headParts = [
-    sphere(r, 20, 16, 0, r * 0.98, 0),
-    box(r * 1.1, r * 0.5, r * 0.9, 0, r * 0.55, r * 0.55, 0, 0, 0, r * 0.2), // jaw
+    ellipsoid(r, broadFace ? 1.09 : 1, broadFace ? 0.98 : 1, 1,
+      0, r * 0.98, 0, 20, 16),
+    box(r * (broadFace ? 1.28 : 1.1), r * (broadFace ? 0.56 : 0.5), r * 0.9,
+      0, r * 0.55, r * 0.55, 0, 0, 0, r * 0.2), // jaw
     cyl(r * 0.36, r * 0.4, r * 0.4, 10, 0, r * 0.06, 0),                     // neck
     sphere(r * 0.2, 8, 6, -r * 0.95, r * 1.0, 0),                            // ears
     sphere(r * 0.2, 8, 6, r * 0.95, r * 1.0, 0),
-    sphere(r * 0.15, 8, 6, 0, r * 0.95, r * 0.92),                           // nose
+    sphere(r * (broadFace ? 0.18 : 0.15), 8, 6, 0, r * 0.95, r * 0.92),       // nose
   ];
   g.head = mergeParts(headParts);
 
   g.eyes = mergeParts([
-    sphere(r * 0.17, 10, 8, -r * 0.36, r * 1.12, r * 0.8),
-    sphere(r * 0.17, 10, 8, r * 0.36, r * 1.12, r * 0.8),
+    sphere(r * (eyeDetail ? 0.2 : 0.17), 10, 8, -r * 0.36, r * 1.12, r * 0.8),
+    sphere(r * (eyeDetail ? 0.2 : 0.17), 10, 8, r * 0.36, r * 1.12, r * 0.8),
   ]);
+  if (eyeDetail) {
+    g.irises = mergeParts([
+      sphere(r * 0.105, 10, 8, -r * 0.36, r * 1.12, r * 0.965),
+      sphere(r * 0.105, 10, 8, r * 0.36, r * 1.12, r * 0.965),
+    ]);
+    g.pupils = mergeParts([
+      sphere(r * 0.048, 8, 6, -r * 0.36, r * 1.12, r * 1.045),
+      sphere(r * 0.048, 8, 6, r * 0.36, r * 1.12, r * 1.045),
+    ]);
+    g.eyeGlints = mergeParts([
+      sphere(r * 0.021, 6, 5, -r * 0.39, r * 1.155, r * 1.086),
+      sphere(r * 0.021, 6, 5, r * 0.33, r * 1.155, r * 1.086),
+    ]);
+  }
+  if (brows === 'thick') {
+    g.brows = mergeParts([
+      box(r * 0.62, r * 0.14, r * 0.13,
+        -r * 0.37, r * 1.43, r * 0.86, 0, 0, -0.08, r * 0.055),
+      box(r * 0.62, r * 0.14, r * 0.13,
+        r * 0.37, r * 1.43, r * 0.86, 0, 0, 0.08, r * 0.055),
+    ]);
+  }
 
   const hairParts = [];
   if (hair === 'short') {
@@ -234,6 +295,15 @@ export function buildBodyGeometry(p, style = {}) {
     hairParts.push(cyl(r * 0.16, r * 0.16, r * 0.9, 8, r * 1.3, r * 0.85, -r * 0.35, 0.2, 0, -0.3));
   } else if (hair === 'bald') {
     hairParts.push(box(r * 2.0, r * 0.35, r * 1.4, 0, r * 1.3, -r * 0.5, 0, 0, 0, r * 0.15));
+  } else if (hair === 'underCap') {
+    // Only the close-cropped back and temples remain visible below the cap.
+    // Avoiding a full scalp sphere prevents hair from poking through the crown.
+    hairParts.push(box(r * 1.75, r * 0.68, r * 0.38,
+      0, r * 1.03, -r * 0.78, 0, 0, 0, r * 0.16));
+    hairParts.push(box(r * 0.2, r * 0.5, r * 0.52,
+      -r * 0.91, r * 1.12, -r * 0.23, 0, 0, 0, r * 0.08));
+    hairParts.push(box(r * 0.2, r * 0.5, r * 0.52,
+      r * 0.91, r * 1.12, -r * 0.23, 0, 0, 0, r * 0.08));
   }
   if (antenna) {
     hairParts.push(cyl(r * 0.06, r * 0.06, r * 1.1, 6, -r * 0.4, r * 2.1, 0, 0, 0, -0.25));
@@ -243,7 +313,7 @@ export function buildBodyGeometry(p, style = {}) {
   }
   g.hair = hairParts.length ? mergeParts(hairParts) : null;
 
-  // Ball cap. Kept separate from the hair so it takes its own colour.
+  // Ball cap. Kept separate from the hair so it takes its own color.
   if (hat === 'cap') {
     // The brim line sits well above the eyes (which are at ~1.12r) or the cap
     // reads as a blindfold.
@@ -260,9 +330,41 @@ export function buildBodyGeometry(p, style = {}) {
     g.hatBadge = mergeParts([
       box(r * 0.4, r * 0.4, r * 0.09, 0, r * 1.55, r * 0.94, 0, 0, 0, r * 0.05),
     ]);
+  } else if (hat === 'flatCap') {
+    // Structured black crown and a long, genuinely flat brim. The crown uses
+    // the corrected scale-then-translate helper above, keeping it above the
+    // eyes instead of sinking down the face.
+    g.hat = mergeParts([
+      ellipsoid(r * 1.04, 1.03, 0.58, 0.97, 0, r * 1.67, -r * 0.07),
+      cyl(r * 1.0, r * 1.06, r * 0.27, 20, 0, r * 1.43, -r * 0.05),
+      box(r * 1.92, r * 0.105, r * 1.34,
+        0, r * 1.43, r * 0.92, -0.055, 0, 0, r * 0.045),
+      sphere(r * 0.105, 8, 6, 0, r * 2.25, -r * 0.07),
+    ]);
+
+    if (hatLogo === 'geometric') {
+      // Two faceted rings and three short spokes echo the white geometric mark
+      // in the reference without importing a texture or branded asset.
+      const outer = new THREE.TorusGeometry(r * 0.27, r * 0.035, 4, 6);
+      outer.rotateZ(Math.PI / 6);
+      outer.translate(0, r * 1.72, r * 0.955);
+      const inner = new THREE.TorusGeometry(r * 0.125, r * 0.028, 4, 6);
+      inner.rotateZ(Math.PI / 6);
+      inner.translate(0, r * 1.72, r * 0.958);
+      g.hatLogo = mergeParts([
+        outer,
+        inner,
+        box(r * 0.055, r * 0.22, r * 0.035,
+          0, r * 1.91, r * 0.958, 0, 0, 0, r * 0.018),
+        box(r * 0.055, r * 0.22, r * 0.035,
+          -r * 0.165, r * 1.625, r * 0.958, 0, 0, -Math.PI / 3, r * 0.018),
+        box(r * 0.055, r * 0.22, r * 0.035,
+          r * 0.165, r * 1.625, r * 0.958, 0, 0, Math.PI / 3, r * 0.018),
+      ]);
+    }
   }
 
-  // Beard: a jaw-hugging mass plus a moustache. Reads at gameplay distance,
+  // Beard: a jaw-hugging mass plus a mustache. Reads at gameplay distance,
   // which is all it needs to do.
   if (beard === 'full') {
     // Sits below the nose (~0.95r) and behind its tip, so the face still reads.
@@ -276,6 +378,35 @@ export function buildBodyGeometry(p, style = {}) {
       box(r * 0.3, r * 0.72, r * 0.62, r * 0.84, r * 0.94, r * 0.06, 0, 0, 0, r * 0.13),
       // Moustache, tucked just under the nose.
       box(r * 0.9, r * 0.22, r * 0.3, 0, r * 0.8, r * 0.9, 0, 0, 0, r * 0.09),
+    ]);
+  } else if (beard === 'saltPepper') {
+    // Separate cheek, chin and mustache volumes preserve a visible nose and
+    // skin planes while still giving Wolfe the broad, very full beard from the
+    // reference. Gray tufts sit just proud of the dark mass for readability.
+    g.beard = mergeParts([
+      ellipsoid(r, 0.8, 0.66, 0.62, 0, r * 0.32, r * 0.39),
+      ellipsoid(r, 0.53, 0.54, 0.46, -r * 0.48, r * 0.58, r * 0.48),
+      ellipsoid(r, 0.53, 0.54, 0.46, r * 0.48, r * 0.58, r * 0.48),
+      box(r * 0.25, r * 0.72, r * 0.48,
+        -r * 0.84, r * 0.92, r * 0.08, 0, 0, 0, r * 0.11),
+      box(r * 0.25, r * 0.72, r * 0.48,
+        r * 0.84, r * 0.92, r * 0.08, 0, 0, 0, r * 0.11),
+      box(r * 0.58, r * 0.2, r * 0.27,
+        -r * 0.25, r * 0.79, r * 0.92, 0, 0, 0.12, r * 0.08),
+      box(r * 0.58, r * 0.2, r * 0.27,
+        r * 0.25, r * 0.79, r * 0.92, 0, 0, -0.12, r * 0.08),
+    ]);
+    g.beardAccent = mergeParts([
+      box(r * 0.1, r * 0.48, r * 0.09,
+        -r * 0.24, r * 0.3, r * 1.0, 0, 0, -0.08, r * 0.035),
+      box(r * 0.115, r * 0.58, r * 0.09,
+        0, r * 0.22, r * 1.02, 0, 0, 0.025, r * 0.035),
+      box(r * 0.09, r * 0.43, r * 0.09,
+        r * 0.25, r * 0.32, r * 0.99, 0, 0, 0.09, r * 0.035),
+      box(r * 0.12, r * 0.13, r * 0.06,
+        -r * 0.23, r * 0.81, r * 1.08, 0, 0, 0.12, r * 0.025),
+      box(r * 0.12, r * 0.13, r * 0.06,
+        r * 0.23, r * 0.81, r * 1.08, 0, 0, -0.12, r * 0.025),
     ]);
   }
 
@@ -337,7 +468,10 @@ export class SoloCharacter {
 
     const c = {
       skin: 0xe8b48c, shirt: 0x486a9c, pants: 0x2f3947,
-      hair: 0x3a2418, shoe: 0x22232a, hat: 0x8e2b2b, badge: 0xe8dcc4, ...colors,
+      hair: 0x3a2418, beardAccent: 0x746b64, brow: 0x30241e,
+      eyeWhite: 0xf1eee8, eye: 0x14161c, pupil: 0x0b0c0e,
+      innerShirt: 0x20242a, button: 0x8a8e92,
+      shoe: 0x22232a, hat: 0x8e2b2b, badge: 0xe8dcc4, ...colors,
     };
     // A character can swap the material of any slot — that's how the flannel
     // shirt and sleeves work without a second rig.
@@ -346,12 +480,21 @@ export class SoloCharacter {
     this.meshes = {
       hips: mk(this.geo.hips, M.hips, c.pants),
       torso: mk(this.geo.torso, M.torso, c.shirt),
+      innerShirt: mk(this.geo.innerShirt, 'cloth', c.innerShirt),
+      collar: mk(this.geo.collar, M.torso, c.shirt),
+      buttons: mk(this.geo.buttons, 'metal', c.button),
       head: mk(this.geo.head, 'skin', c.skin),
-      eyes: mk(this.geo.eyes, 'rubber', 0x14161c),
+      eyes: mk(this.geo.eyes, 'rubber', style.eyeDetail ? c.eyeWhite : c.eye),
+      irises: mk(this.geo.irises, 'rubber', c.eye),
+      pupils: mk(this.geo.pupils, 'rubber', c.pupil),
+      eyeGlints: mk(this.geo.eyeGlints, 'rubber', 0xffffff),
+      brows: mk(this.geo.brows, 'hair', c.brow),
       hair: mk(this.geo.hair, 'hair', c.hair),
       beard: mk(this.geo.beard, 'hair', c.beard ?? c.hair),
+      beardAccent: mk(this.geo.beardAccent, 'hair', c.beardAccent),
       hat: mk(this.geo.hat, M.hat, c.hat),
       hatBadge: mk(this.geo.hatBadge, 'cloth', c.badge),
+      hatLogo: mk(this.geo.hatLogo, 'cloth', c.badge),
       glasses: mk(this.geo.glasses, 'metal', 0x8a6a3a),
       armU_L: mk(this.geo.armU, M.armU, M.armU === 'skin' ? c.skin : c.shirt),
       armU_R: mk(this.geo.armU, M.armU, M.armU === 'skin' ? c.skin : c.shirt),
@@ -380,12 +523,21 @@ export class SoloCharacter {
     const put = (mesh, bone) => { if (mesh) { mesh.matrix.copy(b[bone]); mesh.matrixWorldNeedsUpdate = true; mesh.matrixWorld.copy(b[bone]); } };
     put(M.hips, BONE.HIPS);
     put(M.torso, BONE.TORSO);
+    put(M.innerShirt, BONE.TORSO);
+    put(M.collar, BONE.TORSO);
+    put(M.buttons, BONE.TORSO);
     put(M.head, BONE.HEAD);
     put(M.eyes, BONE.HEAD);
+    put(M.irises, BONE.HEAD);
+    put(M.pupils, BONE.HEAD);
+    put(M.eyeGlints, BONE.HEAD);
+    put(M.brows, BONE.HEAD);
     put(M.hair, BONE.HEAD);
     put(M.beard, BONE.HEAD);
+    put(M.beardAccent, BONE.HEAD);
     put(M.hat, BONE.HEAD);
     put(M.hatBadge, BONE.HEAD);
+    put(M.hatLogo, BONE.HEAD);
     put(M.glasses, BONE.HEAD);
     put(M.armU_L, BONE.ARM_U_L); put(M.armU_R, BONE.ARM_U_R);
     put(M.armL_L, BONE.ARM_L_L); put(M.armL_R, BONE.ARM_L_R);
@@ -427,7 +579,7 @@ const CROWD_PARTS = [
 
 /**
  * A pool of identical-rig characters drawn with InstancedMesh. Each member gets
- * its own body colours; hairstyle variety comes from parallel batches.
+ * its own body colors; hairstyle variety comes from parallel batches.
  */
 export class CrowdBatch {
   constructor(scene, mats, { height = 1.15, chunk = 1, capacity = 48, style = {}, hairStyles = ['short'] } = {}) {

@@ -69,13 +69,31 @@ export class AudioEngine {
     this.started = true;
   }
 
-  setVolume(v) { this.volume = v; if (this.master) this.master.gain.value = v; }
-  setMusicVolume(v) { this.musicVolume = v; }
+  setVolume(v) {
+    this.volume = v;
+    if (this.master) this.master.gain.value = this.enabled ? v : 0;
+  }
+  setMusicVolume(v) {
+    this.musicVolume = v;
+    if (this.musicGain && this._musicTimer && this.ctx) {
+      this.musicGain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.08);
+    }
+  }
   setSfxVolume(v) { this.sfxVolume = v; if (this.sfxGain) this.sfxGain.gain.value = v; }
 
   mute(on) {
     this.enabled = !on;
     if (this.master) this.master.gain.value = on ? 0 : this.volume;
+  }
+
+  /** Briefly make space for an important gameplay cue. */
+  duckMusic(amount = 0.38, duration = 0.75) {
+    if (!this.ctx || !this.musicGain || !this._musicTimer) return;
+    const now = this.ctx.currentTime;
+    const g = this.musicGain.gain;
+    g.cancelScheduledValues(now);
+    g.setTargetAtTime(Math.max(0.0001, this.musicVolume * amount), now, 0.025);
+    g.setTargetAtTime(Math.max(0.0001, this.musicVolume), now + duration, 0.16);
   }
 
   _env(node, { attack = 0.005, decay = 0.2, sustain = 0, release = 0.05, peak = 1, t0 }) {
@@ -157,6 +175,12 @@ export class AudioEngine {
     const pan = opts.pan ?? 0;
     const v = (opts.volume ?? 1);
     const rate = opts.rate ?? 1;
+
+    if (['bossHorn', 'quake', 'alarm', 'levelup', 'win', 'lose'].includes(name)) {
+      this.duckMusic(name === 'alarm' ? 0.5 : 0.32, name === 'quake' ? 1.4 : 0.8);
+    } else if (name === 'boom' && (opts.volume ?? 1) >= 0.7) {
+      this.duckMusic(0.44, 0.55);
+    }
 
     switch (name) {
       case 'step':
