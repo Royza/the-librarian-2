@@ -16,6 +16,7 @@ import { buildCarcassGeometry, buildShelfItemRowGeometry } from '../src/world/le
 import { generateLayout } from '../src/world/generator.js';
 
 const EXPECTED = {
+  cemetery: { counter: 'cemeteryGate', sign: 'cemeteryGate', shelf: 'weathered-graves' },
   library: { counter: 'desk', sign: 'librarysign', shelf: 'bound-books' },
   videostore: { counter: 'videocounter', sign: 'moviesign', shelf: 'vhs-cases' },
   recordstore: { counter: 'recordcounter', sign: 'recordsign', shelf: 'record-sleeves' },
@@ -54,10 +55,10 @@ test('every branch declares and generates a distinct opening identity', () => {
     assert.equal(layout.identity.boulevardName, theme.worldIdentity.boulevardName);
   }
 
-  assert.equal(architectures.size, 4);
-  assert.equal(perimeters.size, 4);
-  assert.equal(ceilings.size, 4);
-  assert.equal(shelfContents.size, 4);
+  assert.equal(architectures.size, 5);
+  assert.equal(perimeters.size, 5);
+  assert.equal(ceilings.size, 5);
+  assert.equal(shelfContents.size, 5);
 });
 
 test('retail district names do not announce library room types', () => {
@@ -74,7 +75,7 @@ test('loose-item kind selection is deterministic and every declared pool has val
   assert.deepEqual([0, 1, 2, 3, 4].map((id) => resolveLooseItemKind(THEMES.grocery, null, id)), ['can', 'cereal', 'apple', 'bottle', 'can']);
   assert.equal(displayItemColor({ visualKind: 'apple', color: 'cobalt', hazard: null }), 'cobalt');
   assert.equal(displayItemColor({ color: 'forest', hazard: { id: 'banana', color: 'amber' } }), 'amber');
-  for (const theme of Object.values(THEMES)) {
+  for (const theme of Object.values(THEMES).filter((entry) => entry.id !== 'cemetery')) {
     const kinds = looseItemKindsForTheme(theme);
     assert.deepEqual(kinds, LOOSE_ITEM_KINDS[theme.id]);
     assert.deepEqual(theme.worldIdentity.looseItems, kinds);
@@ -119,7 +120,7 @@ test('VHS, record, banana, and mushroom silhouettes read differently from above'
 test('shelf carcasses and stocked rows have branch-specific geometry', () => {
   const rowNames = new Set();
   const carcassSignatures = new Set();
-  for (const theme of Object.values(THEMES)) {
+  for (const theme of Object.values(THEMES).filter((entry) => entry.id !== 'cemetery')) {
     const row = buildShelfItemRowGeometry(theme, 0.88, 0.34, 0.2, 0.15);
     rowNames.add(row.name);
     assert.equal(row.userData.itemKind, theme.id === 'library' ? 'book' : theme.id === 'videostore' ? 'vhs' : theme.id === 'recordstore' ? 'record' : 'grocery');

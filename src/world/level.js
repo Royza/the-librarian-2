@@ -83,9 +83,23 @@ export class Level {
       this.root.add(m);
       this.disposables.push(g);
     }
+
+    if (this.layout.outdoor) {
+      for (const p of this.layout.paths || []) {
+        const g = new THREE.PlaneGeometry(p.w, p.d);
+        g.rotateX(-Math.PI / 2);
+        g.rotateY(p.angle || 0);
+        g.translate(p.x, 0.012, p.z);
+        const m = new THREE.Mesh(g, this.mats.accentFloor);
+        m.receiveShadow = true;
+        this.root.add(m);
+        this.disposables.push(g);
+      }
+    }
   }
 
   _buildCeiling() {
+    if (this.layout.outdoor) return;
     const { width, depth, ceilingHeight: H } = this.layout;
     const geo = new THREE.PlaneGeometry(width, depth, 1, 1);
     geo.rotateX(Math.PI / 2);
@@ -149,6 +163,10 @@ export class Level {
   }
 
   _buildWalls() {
+    if (this.layout.outdoor) {
+      this._buildCemeteryPerimeter();
+      return;
+    }
     const { width, depth, ceilingHeight: H } = this.layout;
     const parts = [];
     const t = 1.2;
@@ -223,6 +241,37 @@ export class Level {
       this.disposables.push(shafts, this.windowShaftMaterial);
       this.windowShaftMesh = sm;
     }
+  }
+
+  _buildCemeteryPerimeter() {
+    const { width, depth } = this.layout;
+    const stone = mergeParts([
+      box(width, 0.42, 0.72, width / 2, 0.21, 0.36),
+      box(width, 0.42, 0.72, width / 2, 0.21, depth - 0.36),
+      box(0.72, 0.42, depth, 0.36, 0.21, depth / 2),
+      box(0.72, 0.42, depth, width - 0.36, 0.21, depth / 2),
+    ]);
+    const base = new THREE.Mesh(stone, this.mats.marble);
+    base.castShadow = true; base.receiveShadow = true;
+    this.root.add(base); this.disposables.push(stone);
+
+    const bars = [];
+    const addRail = (x, z, horizontal) => {
+      bars.push(box(horizontal ? 2.02 : 0.055, 0.055, horizontal ? 0.055 : 2.02, x, 1.45, z));
+      bars.push(box(horizontal ? 2.02 : 0.055, 0.055, horizontal ? 0.055 : 2.02, x, 2.25, z));
+      for (let i = -2; i <= 2; i++) {
+        const ox = horizontal ? i * 0.46 : 0;
+        const oz = horizontal ? 0 : i * 0.46;
+        bars.push(box(0.055, 2.15, 0.055, x + ox, 1.45, z + oz));
+        bars.push(cyl(0, 0.09, 0.25, 4, x + ox, 2.65, z + oz, 0, Math.PI / 4));
+      }
+    };
+    for (let x = 1.2; x < width - 1; x += 2.05) { addRail(x, 0.55, true); addRail(x, depth - 0.55, true); }
+    for (let z = 1.2; z < depth - 1; z += 2.05) { addRail(0.55, z, false); addRail(width - 0.55, z, false); }
+    const iron = mergeParts(bars);
+    const fence = new THREE.Mesh(iron, this.mats.metal);
+    fence.castShadow = true;
+    this.root.add(fence); this.disposables.push(iron);
   }
 
   _windowShaftGeometries(w) {
@@ -787,6 +836,26 @@ export class Level {
     this.disposables.push(g);
     this._motePos = pos;
     this._moteCount = count;
+
+    if (this.layout.outdoor) {
+      const fogGeo = new THREE.PlaneGeometry(18, 10);
+      const fogMat = new THREE.MeshBasicMaterial({
+        map: TX.radialAlpha({ size: 128, power: 1.4, inner: 0.7 }),
+        color: 0x9db7c9, transparent: true, opacity: 0.12,
+        depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
+      });
+      this.groundFog = [];
+      for (let i = 0; i < 22; i++) {
+        const fog = new THREE.Mesh(fogGeo, fogMat);
+        fog.rotation.x = -Math.PI / 2;
+        fog.rotation.z = Math.random() * Math.PI;
+        fog.position.set(Math.random() * this.layout.width, 0.16 + Math.random() * 0.18, Math.random() * this.layout.depth);
+        fog.scale.set(0.7 + Math.random(), 0.7 + Math.random(), 1);
+        fog.userData.phase = Math.random() * 6.28;
+        this.root.add(fog); this.groundFog.push(fog);
+      }
+      this.disposables.push(fogGeo, fogMat);
+    }
   }
 
   // --- Per-frame ------------------------------------------------------------
@@ -825,6 +894,12 @@ export class Level {
       if (dz > 22) pos[i3 + 2] -= 44; else if (dz < -22) pos[i3 + 2] += 44;
     }
     this.motes.geometry.attributes.position.needsUpdate = true;
+
+    if (this.groundFog) for (let i = 0; i < this.groundFog.length; i++) {
+      const fog = this.groundFog[i];
+      fog.position.x += Math.sin(this.time * 0.08 + fog.userData.phase) * dt * 0.12;
+      fog.material.opacity = 0.1 + Math.sin(this.time * 0.2 + i) * 0.025;
+    }
 
     // Shafts breathe very slightly. Each keeps its own base opacity — the
     // skylight column is far subtler than a window beam.

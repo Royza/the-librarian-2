@@ -5,6 +5,10 @@ import { SIGNATURE_POWER_IDS } from '../data/upgrades.js';
 import { ITEM_STATE } from './items.js';
 
 const EVENT_GUIDES = {
+  masterVampire: {
+    title: 'DUST THE MASTER',
+    body: 'The Master Vampire is tougher, faster, and visibly tracked above the action and on the map. Dodge its rushes, then alternate stake lunges and kicks.',
+  },
   bully: {
     title: 'CATCH THE BULLY',
     body: 'Follow the red BULLY marker on the map. Chase Braden and stay right beside him to drain his bar.',
@@ -44,6 +48,10 @@ const EVENT_GUIDES = {
 };
 
 const BRANCH_GUIDES = {
+  cemetery: {
+    title: 'WELCOME TO THE PATROL',
+    body: 'Move with WASD, sprint with Shift, and dodge with Space. Q stakes the nearest vampire in range; E delivers a wider, heavier Slayer kick. Keep Hellmouth Activity below 100% until sunrise.',
+  },
   library: {
     title: 'DEWEY STREAK',
     body: 'Keep filing without a long pause to build a 12-item combo. The branch objective card under the map tracks your streak.',
@@ -122,6 +130,15 @@ export class TutorialSystem {
     this.didDash = false;
     this._mobilitySignature = null;
     this._karenNoticeSignature = null;
+
+    if (this.game.theme?.id === 'cemetery') {
+      this.game.run.tutorialActive = false;
+      this.activeIntro = false;
+      this.step = null;
+      this._hide();
+      this._branchGuide();
+      return;
+    }
 
     if (!this.game.save.shouldShowIntroTutorial()) {
       this.game.run.tutorialActive = false;

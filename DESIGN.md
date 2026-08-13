@@ -1,5 +1,10 @@
 # The Librarian 2 — Complete Project Reference
 
+> **Legacy engine reference:** this document describes the original librarian
+> and retail systems retained by the engine. The current default game is the
+> Buffy: Cemetery Patrol vertical slice; see [`README.md`](README.md) for its
+> current gameplay, controls, setup, and status.
+
 > **Purpose of this document.** This is the full technical and design specification
 > for *The Librarian 2 — "Look, Ma, I Could Read Good"*. It is written so that a
 > person or an LLM with no prior context can read it, open the repository, and
@@ -69,13 +74,13 @@ than combat. You never kill anything. The antagonist is entropy.
 ## 2. Quick start
 
 ```bash
-npm install
-npm run dev      # http://localhost:5273
+./start.sh       # install when needed and serve on http://localhost:5273
 npm run build    # production bundle -> dist/
 npm run preview  # serve the built bundle on :4173
 ```
 
-Requires a WebGL2 browser. Node 18+ to build.
+The manual development equivalent is `npm ci && npm run dev`. Requires a WebGL2
+browser and a current Node.js LTS release; Node 22 is the tested path.
 
 There is a `.claude/launch.json` describing the dev server for tooling that
 reads it (name `librarian2`, port 5273).

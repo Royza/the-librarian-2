@@ -51,7 +51,7 @@ export class Progression {
       for (let i = 1; i <= lvl; i++) this._take(UPGRADES[id]);
     }
     for (let i = 0; i < this.headStart; i++) {
-      const options = draftUpgrades(this.rng, this.levels, 1, new Set(), this.level);
+      const options = draftUpgrades(this.rng, this.levels, 1, new Set(), this.level, this.game.theme.id);
       if (options[0]) this._take(options[0]);
       this.level++;
       this.xpToNext = xpRequiredForLevel(this.level);
@@ -122,6 +122,7 @@ export class Progression {
         this.draftCount,
         new Set(),
         this.level,
+        this.game.theme.id,
       ));
       if (options.length) {
         this.currentOffer = options;
@@ -151,13 +152,14 @@ export class Progression {
     if (this.game.state !== 'levelup' || this.rerollsLeft <= 0 || !this.currentOffer) return false;
     this.rerollsLeft--;
     const exclude = new Set(this.currentOffer.map((o) => o.id));
-    let options = draftUpgrades(this.rng, this.levels, this.draftCount, exclude, this.level);
+    let options = draftUpgrades(this.rng, this.levels, this.draftCount, exclude, this.level, this.game.theme.id);
     if (!options.length) options = draftUpgrades(
       this.rng,
       this.levels,
       this.draftCount,
       new Set(),
       this.level,
+      this.game.theme.id,
     );
     this.currentOffer = options;
     this.game.audio.play('ui');

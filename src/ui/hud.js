@@ -7,12 +7,8 @@ import { formatKeyCode, gamepadLabelFor, isEditableTarget } from '../core/input.
 const _v = new THREE.Vector3();
 
 const CHAOS_CAPTIONS = [
-  [0, 'ORDERLY'],
-  [15, 'A FEW STRAYS'],
-  [32, 'GETTING MESSY'],
-  [50, 'LOSING CONTROL'],
-  [68, 'BEDLAM'],
-  [84, 'TOTAL ANARCHY'],
+  [0, 'DORMANT'], [15, 'STIRRING'], [32, 'UNREST'],
+  [50, 'SURGING'], [68, 'HELLMOUTH RISING'], [84, 'APOCALYPSE'],
 ];
 
 /** All the in-run overlay: meters, minimap, popups, banners. */
@@ -115,12 +111,9 @@ export class HUD {
   setCartography(l) { this.cartography = 1 + l; }
 
   _buildPowers() {
-    const defs = [
-      { id: 'gravityGun', icon: '🔫' },
-      { id: 'bookerang', icon: '🪃' },
-      { id: 'colorPulse', icon: '🌈' },
-      { id: 'dash', icon: '💨' },
-    ];
+    const defs = this.game.theme?.id === 'cemetery'
+      ? [{ id: 'gravityGun', icon: '🗡️' }, { id: 'bookerang', icon: '🥾' }, { id: 'dash', icon: '💨' }]
+      : [{ id: 'gravityGun', icon: '🔫' }, { id: 'bookerang', icon: '🪃' }, { id: 'colorPulse', icon: '🌈' }, { id: 'dash', icon: '💨' }];
     this.el.powers.innerHTML = '';
     for (const d of defs) {
       const el = document.createElement('div');
@@ -167,7 +160,10 @@ export class HUD {
   }
 
   showLevelBanner(theme, layout) {
-    this.banner(theme.name.toUpperCase(), `${layout.stats.bays.toLocaleString()} shelves · seed ${String(layout.seed).slice(0, 6)}`, { ms: 3200 });
+    const detail = theme.id === 'cemetery'
+      ? `KEEP ACTIVITY UNDER CONTROL UNTIL SUNRISE · seed ${String(layout.seed).slice(0, 6)}`
+      : `${layout.stats.bays.toLocaleString()} shelves · seed ${String(layout.seed).slice(0, 6)}`;
+    this.banner(theme.name.toUpperCase(), detail, { ms: 3200 });
   }
 
   popup(x, y, z, text, color = '#ffffff') {
@@ -194,7 +190,7 @@ export class HUD {
     const r = g.run;
     const pct = r.chaos / r.maxChaos;
     this.el.chaosFill.style.width = `${(pct * 100).toFixed(1)}%`;
-    this.el.chaosLabel.textContent = `CHAOS  ${Math.floor(r.chaos)}%`;
+    this.el.chaosLabel.textContent = `${g.theme.id === 'cemetery' ? 'HELLMOUTH ACTIVITY' : 'CHAOS'}  ${Math.floor(r.chaos)}%`;
     this.el.chaos.classList.toggle('critical', pct > 0.78);
     let cap = CHAOS_CAPTIONS[0][1];
     for (const [t, c] of CHAOS_CAPTIONS) if (r.chaos >= t) cap = c;
@@ -227,18 +223,25 @@ export class HUD {
     this._updateMopper();
     this._updatePopups(dt);
     this._updateMinimap();
+    this.root.classList.toggle('cemetery', g.theme.id === 'cemetery');
     this.tutorial.update(dt);
 
     if (this.debugOn) {
       const info = g.render.renderer.info;
       this.el.debug.textContent =
         `fps ${g.fps.toFixed(0)}  draws ${info.render.calls}  tris ${(info.render.triangles / 1000).toFixed(0)}k\n` +
-        `kids ${g.kids.count}/${g.kids.maxKids}  items ${g.items.floorCount} floor  bosses ${g.bosses.active.length}\n` +
+        `${g.theme.id === 'cemetery' ? 'vampires' : 'kids'} ${g.kids.count}/${g.kids.maxKids}  items ${g.items.floorCount} floor  bosses ${g.bosses.active.length}\n` +
         `bays ${g.layout.stats.bays}  seed ${g.layout.seed}  quality ${g.render.quality}`;
     }
   }
 
   _updateCarry(p) {
+    if (this.game.theme.id === 'cemetery') {
+      this.el.carry.replaceChildren();
+      this.slots.length = 0;
+      this.el.carryLabel.textContent = `VAMPIRES SLAIN  ${this.game.run.vampiresSlain}`;
+      return;
+    }
     const need = p.stats.carrySlots;
     while (this.slots.length < need) {
       const s = document.createElement('div');
@@ -284,6 +287,18 @@ export class HUD {
         el.querySelector('.cd').style.transform = `scaleY(${Math.max(0, cd / max)})`;
         continue;
       }
+      if (g.theme?.id === 'cemetery' && id === 'gravityGun') {
+        const cd = g.player.attackTimer, max = g.player.stats.attackCooldown;
+        el.classList.remove('locked'); el.classList.toggle('ready', cd <= 0);
+        el.querySelector('.cd').style.transform = `scaleY(${Math.max(0, cd / max)})`;
+        continue;
+      }
+      if (g.theme?.id === 'cemetery' && id === 'bookerang') {
+        const cd = g.player.kickTimer, max = g.player.stats.kickCooldown;
+        el.classList.remove('locked'); el.classList.toggle('ready', cd <= 0);
+        el.querySelector('.cd').style.transform = `scaleY(${Math.max(0, cd / max)})`;
+        continue;
+      }
       const lvl = g.powers.levels[id] || 0;
       el.classList.toggle('locked', lvl === 0);
       if (!lvl) {
@@ -310,7 +325,7 @@ export class HUD {
 
   _updateBosses() {
     const g = this.game;
-    const live = g.bosses.active.filter((b) => b.alive);
+    const live = trackedBosses(g);
     const host = this.el.bosses;
     while (host.children.length > live.length) host.lastChild.remove();
     while (host.children.length < live.length) {
@@ -443,7 +458,7 @@ export class HUD {
     const c = cv.getContext('2d');
     const s = size / Math.max(L.width, L.depth);
 
-    c.fillStyle = 'rgba(24,17,10,0.9)';
+    c.fillStyle = this.game.theme.id === 'cemetery' ? 'rgba(5,12,18,0.94)' : 'rgba(24,17,10,0.9)';
     c.fillRect(0, 0, size, size);
 
     // Districts, tinted by their dominant color.
@@ -462,6 +477,15 @@ export class HUD {
       c.moveTo((run.x - hx) * s, (run.z - hz) * s);
       c.lineTo((run.x + hx) * s, (run.z + hz) * s);
       c.stroke();
+    }
+    if (L.outdoor) {
+      c.fillStyle = 'rgba(132,119,91,.28)';
+      for (const path of L.paths || []) {
+        c.save(); c.translate(path.x * s, path.z * s); c.rotate(path.angle || 0);
+        c.fillRect(-path.w * s / 2, -path.d * s / 2, path.w * s, path.d * s); c.restore();
+      }
+      c.fillStyle = 'rgba(179,188,194,.6)';
+      for (const prop of L.props || []) if (['mausoleum', 'crypt', 'obelisk', 'stoneAngel'].includes(prop.kind)) c.fillRect(prop.x * s - 2, prop.z * s - 2, 4, 4);
     }
     // Perimeter.
     c.strokeStyle = 'rgba(232,182,76,0.6)';
@@ -510,16 +534,23 @@ export class HUD {
       const [x, y] = toScreen(it.x, it.z);
       drawItemDot(ctx, x, y, it.color, !!g.save.settings.colorLabels);
     }
-    for (const k of g.kids.active) {
-      const [x, y] = toScreen(k.x, k.z);
-      ctx.fillStyle = k.heldItem ? '#ff6a6a' : '#ffd77a';
-      ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+    for (const vampire of g.vampires?.active || []) {
+      const [x, y] = toScreen(vampire.x, vampire.z);
+      ctx.fillStyle = vampire.elite ? '#ff4b63' : '#d7dce2';
+      ctx.beginPath(); ctx.arc(x, y, vampire.elite ? 3.2 : 2.3, 0, Math.PI * 2); ctx.fill();
+    }
+    if (!g.vampires) {
+      for (const k of g.kids.active) {
+        const [x, y] = toScreen(k.x, k.z);
+        ctx.fillStyle = k.heldItem ? '#ff6a6a' : '#ffd77a';
+        ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2); ctx.fill();
+      }
     }
     // Bosses and disasters are core objectives, not an upgrade privilege. They
     // are always labeled, outlined, and clamped to the map edge when distant.
     const pulse = minimapPulse(performance.now(), !!g.save.settings.reducedMotion);
     const markerScale = Math.max(0.9, Math.min(1.3, Number(g.save.settings.textScale) || 1));
-    for (const b of g.bosses.active) {
+    for (const b of trackedBosses(g)) {
       if (!b.alive) continue;
       const [x, y] = toScreen(b.x, b.z);
       drawTrackedMarker(ctx, x, y, W, `#${b.type.color.toString(16).padStart(6, '0')}`, bossMapLabel(b.type.id), pulse, markerScale);
@@ -573,7 +604,7 @@ export class HUD {
   _updateMapAlerts() {
     const g = this.game;
     const alerts = [];
-    for (const b of g.bosses.active) {
+    for (const b of trackedBosses(g)) {
       if (!b.alive) continue;
       let detail = bossObjective(b.type.id).short;
       if (b.type.id === 'karen') {
@@ -604,12 +635,12 @@ const TEMPLATE = `
   <div class="chaos-frame">
     <div class="chaos-fill"></div>
     <div class="chaos-ticks"><i style="left:25%"></i><i style="left:50%"></i><i style="left:75%"></i></div>
-    <div class="chaos-label">CHAOS 0%</div>
+    <div class="chaos-label">HELLMOUTH ACTIVITY 0%</div>
   </div>
-  <div class="chaos-caption">ORDERLY</div>
+  <div class="chaos-caption">DORMANT</div>
 </div>
 
-<div class="timer"><span class="t">15:00</span><small>UNTIL CLOSING</small></div>
+<div class="timer"><span class="t">15:00</span><small>UNTIL SUNRISE</small></div>
 
 <div class="vitals">
   <div class="panel">
@@ -677,12 +708,19 @@ function bossObjective(id) {
     karen: { short: 'FILE HER COLOR', long: 'FILE THE REQUESTED COLOR' },
     sickKid: { short: 'CLEAN IT UP', long: 'MOP PUDDLES OR STAY CLOSE TO COMFORT' },
     chaperone: { short: 'CONFRONT HER', long: 'STAY CLOSE WHILE CONTROLLING THE CLASS' },
+    masterVampire: { short: 'DUST THE MASTER', long: 'STAKE THE MASTER VAMPIRE' },
   };
   return defs[id] || { short: 'COMPLETE OBJECTIVE', long: 'FOLLOW THE MARKER' };
 }
 
 function bossMapLabel(id) {
-  return ({ bully: 'BULLY', karen: 'KAREN', sickKid: 'PERCY', chaperone: 'CHAPERONE' })[id] || String(id).toUpperCase();
+  return ({ bully: 'BULLY', karen: 'KAREN', sickKid: 'PERCY', chaperone: 'CHAPERONE', masterVampire: 'MASTER' })[id] || String(id).toUpperCase();
+}
+
+function trackedBosses(game) {
+  const authored = game.bosses?.active?.filter((boss) => boss.alive) || [];
+  const masters = game.vampires?.active?.filter((vampire) => vampire.alive && vampire.master) || [];
+  return authored.concat(masters);
 }
 
 function disasterMapLabel(id) {

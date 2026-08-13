@@ -1,6 +1,7 @@
 import { RNG } from '../core/rng.js';
 import { ITEM_COLORS } from '../data/themes.js';
 import { SHELF_STYLES } from '../data/shelfStyles.js';
+import { generateCemeteryLayout } from './cemeteryGenerator.js';
 
 // ---------------------------------------------------------------------------
 // Procedural floor-plan generator.
@@ -43,6 +44,7 @@ class Rect {
 }
 
 export function generateLayout(seedInput, theme, options = {}) {
+  if (theme.id === 'cemetery') return generateCemeteryLayout(seedInput, theme, options);
   const validationAttempts = Math.max(1, options.validationAttempts ?? 12);
   for (let attempt = 0; attempt < validationAttempts; attempt++) {
     const attemptSeed = attempt === 0

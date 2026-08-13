@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SoloCharacter } from './character.js';
+import { BONE, SoloCharacter } from './character.js';
 import { ITEM_STATE } from '../systems/items.js';
 import { nearestBay, queryBays, bayAccepts } from '../world/generator.js';
 import { getCharacter } from '../data/characters.js';
@@ -7,6 +7,7 @@ import { getCharacter } from '../data/characters.js';
 const RADIUS = 0.36;
 const _res = { x: 0, z: 0, hit: null };
 const _dir = new THREE.Vector3();
+const _stakeLocal = new THREE.Matrix4().makeTranslation(0, -0.03, 0.08);
 
 export const BASE_PLAYER_STATS = Object.freeze({
   moveSpeed: 5.0,
@@ -31,6 +32,14 @@ export const BASE_PLAYER_STATS = Object.freeze({
   disasterDurationScale: 1,
   mopSpeed: 1,
   autoClean: false,
+  stakeDamage: 34,
+  attackCooldown: 0.42,
+  attackRange: 2.25,
+  attackArc: Math.PI * 0.72,
+  kickDamage: 52,
+  kickCooldown: 1.15,
+  criticalChance: 0.08,
+  vampireMitigation: 1,
 });
 
 const perkLevel = (levels, id) => Math.max(0, Number(levels?.[id]) || 0);
@@ -40,7 +49,7 @@ const perkLevel = (levels, id) => Math.max(0, Number(levels?.[id]) || 0);
  * place. Rebuilding from levels makes upgrade order irrelevant and prevents a
  * later assignment from silently erasing an earlier perk.
  */
-export function derivePlayerStats(metaLevels = {}, upgradeLevels = {}, characterBonuses = {}) {
+export function derivePlayerStats(metaLevels = {}, upgradeLevels = {}, characterBonuses = {}, mode = 'library') {
   const meta = (id) => perkLevel(metaLevels, id);
   const run = (id) => perkLevel(upgradeLevels, id);
   const moveSpeedMul = Number(characterBonuses.moveSpeedMul) || 1;
@@ -50,7 +59,7 @@ export function derivePlayerStats(metaLevels = {}, upgradeLevels = {}, character
   return {
     ...BASE_PLAYER_STATS,
     baseMoveSpeed,
-    moveSpeed: baseMoveSpeed * (1 + 0.08 * run('comfyShoes')),
+    moveSpeed: baseMoveSpeed * (1 + 0.08 * run('comfyShoes')) * (1 + 0.07 * run('slayerSpeed')),
     pickupRadius: BASE_PLAYER_STATS.pickupRadius
       + 0.3 * meta('longReach')
       + 0.55 * run('longArms')
@@ -63,15 +72,19 @@ export function derivePlayerStats(metaLevels = {}, upgradeLevels = {}, character
       + 2 * meta('tenure')
       + 2 * run('backpack')
       + (Number(characterBonuses.carrySlots) || 0)),
-    maxStamina: BASE_PLAYER_STATS.maxStamina + 20 * meta('espresso') + 25 * run('fitness'),
+    maxStamina: BASE_PLAYER_STATS.maxStamina + 20 * meta('espresso') + 25 * run('fitness') + 15 * run('staminaRecovery'),
     staminaRegen: BASE_PLAYER_STATS.staminaRegen
       * (1 + 0.12 * meta('espresso'))
-      * (1 + 0.15 * run('fitness')),
+      * (mode === 'cemetery' ? 1 + 0.08 * meta('janitorial') : 1)
+      * (1 + 0.15 * run('fitness'))
+      * (1 + 0.18 * run('staminaRecovery')),
     sprintMul: BASE_PLAYER_STATS.sprintMul + 0.15 * run('sprintCoach'),
     staminaDrain: BASE_PLAYER_STATS.staminaDrain * (1 - 0.1 * run('sprintCoach')),
     maxHealth: BASE_PLAYER_STATS.maxHealth + 20 * meta('sturdySpine') + 25 * run('laminator'),
-    dashCooldown: BASE_PLAYER_STATS.dashCooldown * (1 - 0.18 * run('dashTraining')),
-    dashDistance: BASE_PLAYER_STATS.dashDistance + 0.7 * run('dashTraining'),
+    dashCooldown: BASE_PLAYER_STATS.dashCooldown * (1 - 0.18 * run('dashTraining')) * (1 - 0.1 * run('dodgeDistance')),
+    dashDistance: BASE_PLAYER_STATS.dashDistance + 0.7 * run('dashTraining') + 0.8 * run('dodgeDistance'),
+    regen: BASE_PLAYER_STATS.regen + 0.6 * run('slayerHealing'),
+    regenDelay: Math.max(2.5, BASE_PLAYER_STATS.regenDelay - 0.5 * run('slayerHealing')),
     chaosDampening: 4 * meta('unionRep') + 5 * run('zenFocus'),
     xpMultiplier: 1 + 0.08 * meta('overtime') + 0.1 * run('readingGlasses'),
     // Separate percentage reductions compound. At maximom investment this
@@ -81,6 +94,13 @@ export function derivePlayerStats(metaLevels = {}, upgradeLevels = {}, character
     // Cleaning-speed bonuses add in percentage points, matching their copy.
     mopSpeed: 1 + 0.2 * meta('janitorial') + 0.3 * run('janitor'),
     autoClean: run('janitor') >= 3,
+    stakeDamage: BASE_PLAYER_STATS.stakeDamage * (1 + 0.22 * run('stakeDamage')) * (mode === 'cemetery' ? 1 + 0.06 * meta('tenure') : 1),
+    attackCooldown: BASE_PLAYER_STATS.attackCooldown * Math.max(0.48, 1 - 0.1 * run('attackSpeed')),
+    attackRange: BASE_PLAYER_STATS.attackRange + 0.18 * run('wideArc') + (mode === 'cemetery' ? 0.12 * meta('longReach') : 0),
+    attackArc: BASE_PLAYER_STATS.attackArc + 0.18 * run('wideArc'),
+    kickDamage: BASE_PLAYER_STATS.kickDamage * (1 + 0.18 * run('stakeDamage')) * (mode === 'cemetery' ? 1 + 0.06 * meta('tenure') : 1),
+    criticalChance: BASE_PLAYER_STATS.criticalChance + 0.07 * run('criticalStake'),
+    vampireMitigation: mode === 'cemetery' ? Math.max(0.7, 1 - 0.1 * meta('insurance')) : 1,
   };
 }
 
@@ -100,7 +120,7 @@ export class Player {
     this.character = getCharacter(game.characterId);
     this.metaLevels = {};
     this.upgradeLevels = {};
-    this.stats = derivePlayerStats(this.metaLevels, this.upgradeLevels, this.character.bonuses);
+    this.stats = derivePlayerStats(this.metaLevels, this.upgradeLevels, this.character.bonuses, game.theme.id);
 
     this.health = this.stats.maxHealth;
     this.stamina = this.stats.maxStamina;
@@ -112,6 +132,9 @@ export class Player {
     this.invuln = 0;
     this.hurtFlash = 0;
     this.fragileCooldown = 0;
+    this.attackTimer = 0;
+    this.kickTimer = 0;
+    this.attackPose = 0;
 
     // Status effects: slipping on a banana, mushroom growth, chilli dash, …
     this.effects = new Map();
@@ -127,6 +150,20 @@ export class Player {
       colors: this.character.colors,
       matMap: this.character.matMap,
     });
+
+    this.stake = null;
+    if (game.theme.id === 'cemetery') {
+      const geometry = new THREE.ConeGeometry(0.055, 0.72, 8);
+      geometry.rotateX(Math.PI / 2);
+      geometry.translate(0, 0, 0.34);
+      const material = game.mats.darkWood.clone();
+      material.color.setHex(0x8b5a2b);
+      material.vertexColors = false;
+      this.stake = new THREE.Mesh(geometry, material);
+      this.stake.castShadow = true;
+      this.stake.matrixAutoUpdate = false;
+      game.render.scene.add(this.stake);
+    }
 
     this.shadow = makeShadowBlob(game.render.scene, game.mats, 1.5);
 
@@ -249,12 +286,13 @@ export class Player {
       this.yaw = angleLerp(this.yaw, want, 1 - Math.exp(-dt * 13));
     }
 
-    // --- animation
+    // --- animation and cemetery combat
+    this._updateCombat(dt, input);
     this.phase += moveLen * dt * 2.35 / this.scaleMul;
     this.anim.phase = this.phase;
     this.anim.speed = moveLen;
     this.anim.lean = Math.min(1, moveLen / 7) * (sprinting ? 1 : 0.6);
-    this.anim.armMode = this.carried.length > 0 ? 'carry' : 'swing';
+    this.anim.armMode = this.attackPose > 0 ? 'reach' : (this.carried.length > 0 ? 'carry' : 'swing');
     this.anim.hurt = this.hurtFlash * 0.5;
     this.anim.flail = slipping ? 1 : 0;
     this.anim.crouch = 0;
@@ -278,17 +316,70 @@ export class Player {
     }
 
     // --- the core loop: vacuum items in, file them out
-    this._vacuum(dt);
-    this._autoShelve(dt);
-    this._positionCarried();
+    if (game.theme.id !== 'cemetery') {
+      this._vacuum(dt);
+      this._autoShelve(dt);
+      this._positionCarried();
+    }
 
     // --- present
     const y = 0;
     this.model.pose(this.x, y, this.z, this.yaw, this.anim, this.scaleMul);
+    if (this.stake) {
+      this.stake.matrix.multiplyMatrices(this.model.bones[BONE.HAND_R], _stakeLocal);
+      this.stake.matrixWorldNeedsUpdate = true;
+    }
     this.shadow.position.set(this.x, 0.015, this.z);
     const sc = (1.5 + moveLen * 0.02) * this.scaleMul;
     this.shadow.scale.set(sc, 1, sc);
     this.shadow.material.opacity = 0.4;
+  }
+
+  _updateCombat(dt, input) {
+    if (!this.game.vampires) return;
+    this.attackTimer = Math.max(0, this.attackTimer - dt);
+    this.kickTimer = Math.max(0, this.kickTimer - dt);
+    this.attackPose = Math.max(0, this.attackPose - dt * 5.5);
+
+    if (input.wasPressed('gravityGun') && this.attackTimer <= 0) {
+      this._faceAttackTarget(this.stats.attackRange + 1.2);
+      this.attackTimer = this.stats.attackCooldown;
+      this.attackPose = 1;
+      const hits = this.game.vampires.strike({
+        x: this.x, z: this.z, yaw: this.yaw,
+        range: this.stats.attackRange, arc: this.stats.attackArc,
+        damage: this.stats.stakeDamage, knockback: 0.18,
+        criticalChance: this.stats.criticalChance,
+      });
+      this.game.audio.play(hits ? 'stake' : 'whoosh', { rate: hits ? 1.35 : 1.6, volume: 0.45 });
+      this.game.events?.emit?.('slayerAttack', { kind: 'stake', hits });
+      this.game.fx.ring(this.x + Math.sin(this.yaw) * 0.8, 0.5, this.z + Math.cos(this.yaw) * 0.8, { r0: 0.2, r1: 2.2, dur: 0.22, color: 0xd9e7ff });
+    }
+
+    if (input.wasPressed('bookerang') && this.kickTimer <= 0) {
+      this._faceAttackTarget(3.6);
+      this.kickTimer = this.stats.kickCooldown;
+      this.attackPose = 0.75;
+      const hits = this.game.vampires.strike({
+        x: this.x, z: this.z, yaw: this.yaw,
+        range: 2.65, arc: Math.PI * 0.92,
+        damage: this.stats.kickDamage, knockback: 1.05,
+        criticalChance: 0,
+      });
+      this.game.audio.play(hits ? 'kick' : 'whoosh', { rate: 0.75, volume: 0.62 });
+      this.game.events?.emit?.('slayerAttack', { kind: 'kick', hits });
+      this.game.camera.addTrauma(hits ? 0.14 : 0.04);
+      this.game.fx.ring(this.x, 0.12, this.z, { r0: 0.35, r1: 3.1, dur: 0.3, color: 0xffd29b });
+    }
+  }
+
+  _faceAttackTarget(range) {
+    let target = null, best = range * range;
+    for (const vampire of this.game.vampires.active) {
+      const d = (vampire.x - this.x) ** 2 + (vampire.z - this.z) ** 2;
+      if (d < best) { best = d; target = vampire; }
+    }
+    if (target) this.yaw = Math.atan2(target.x - this.x, target.z - this.z);
   }
 
   _vacuum(dt) {
@@ -415,7 +506,7 @@ export class Player {
   refreshDerivedStats({ restoreGrowth = false } = {}) {
     const oldMaxHealth = this.stats?.maxHealth ?? BASE_PLAYER_STATS.maxHealth;
     const oldMaxStamina = this.stats?.maxStamina ?? BASE_PLAYER_STATS.maxStamina;
-    Object.assign(this.stats, derivePlayerStats(this.metaLevels, this.upgradeLevels, this.character?.bonuses));
+    Object.assign(this.stats, derivePlayerStats(this.metaLevels, this.upgradeLevels, this.character?.bonuses, this.game.theme?.id));
 
     if (restoreGrowth) {
       this.health = Math.min(this.stats.maxHealth, this.health + Math.max(0, this.stats.maxHealth - oldMaxHealth));
@@ -454,6 +545,11 @@ export class Player {
 
   dispose() {
     this.model.dispose();
+    if (this.stake) {
+      this.stake.parent?.remove(this.stake);
+      this.stake.geometry.dispose();
+      this.stake.material.dispose();
+    }
     this.shadow.parent?.remove(this.shadow);
   }
 }

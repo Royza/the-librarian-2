@@ -2,8 +2,45 @@
 // and every pick has to feel like it changes how the next minute plays.
 
 export const SIGNATURE_POWER_IDS = Object.freeze(['gravityGun', 'bookerang', 'colorPulse']);
+export const CEMETERY_UPGRADE_IDS = Object.freeze([
+  'stakeDamage', 'attackSpeed', 'slayerSpeed', 'dodgeDistance',
+  'slayerHealing', 'wideArc', 'criticalStake', 'staminaRecovery',
+]);
 
 export const UPGRADES = {
+  stakeDamage: {
+    id: 'stakeDamage', name: 'Pointy End First', icon: '🗡️', kind: 'slayer',
+    desc: (l) => `Stake damage +${22 * l}%; kicks also hit harder.`, maxLevel: 5,
+  },
+  attackSpeed: {
+    id: 'attackSpeed', name: 'Slayer Reflexes', icon: '⚡', kind: 'slayer',
+    desc: (l) => `Stake attacks recover ${10 * l}% faster.`, maxLevel: 5,
+  },
+  slayerSpeed: {
+    id: 'slayerSpeed', name: 'Patrol Pace', icon: '🥾', kind: 'slayer',
+    desc: (l) => `Movement speed +${7 * l}%.`, maxLevel: 5,
+  },
+  dodgeDistance: {
+    id: 'dodgeDistance', name: 'Chosen One Footwork', icon: '💨', kind: 'slayer',
+    desc: (l) => `Dodge distance +${(0.8 * l).toFixed(1)} m and cooldown −${10 * l}%.`, maxLevel: 4,
+  },
+  slayerHealing: {
+    id: 'slayerHealing', name: 'Slayer Healing', icon: '❤️‍🩹', kind: 'slayer',
+    desc: (l) => `Regenerate sooner and recover ${0.6 * l} extra health per second.`, maxLevel: 4,
+  },
+  wideArc: {
+    id: 'wideArc', name: 'Sweeping Strike', icon: '🌙', kind: 'slayer',
+    desc: (l) => `Melee reach and attack arc increase at level ${l}.`, maxLevel: 4,
+  },
+  criticalStake: {
+    id: 'criticalStake', name: 'Heart Seeker', icon: '🎯', kind: 'slayer',
+    desc: (l) => `Critical staking chance +${7 * l}%. Critical hits deal double damage.`, maxLevel: 4,
+  },
+  staminaRecovery: {
+    id: 'staminaRecovery', name: 'Second Wind', icon: '🫁', kind: 'slayer',
+    desc: (l) => `Stamina recovery +${18 * l}% and maximum stamina +${15 * l}.`, maxLevel: 4,
+  },
+
   // --- Signature powers -----------------------------------------------------
   gravityGun: {
     id: 'gravityGun', name: 'Dewey Decimal Beam', icon: '🔫', kind: 'power',
@@ -138,9 +175,11 @@ export const UPGRADES = {
 export const UPGRADE_LIST = Object.values(UPGRADES);
 
 /** Draft `count` options, biased toward leveling up what you already own. */
-export function draftUpgrades(rng, levels, count = 3, exclude = new Set(), runLevel = Infinity) {
+export function draftUpgrades(rng, levels, count = 3, exclude = new Set(), runLevel = Infinity, mode = 'legacy') {
   const pool = [];
   for (const u of UPGRADE_LIST) {
+    const cemeteryUpgrade = CEMETERY_UPGRADE_IDS.includes(u.id);
+    if (mode === 'cemetery' ? !cemeteryUpgrade : cemeteryUpgrade) continue;
     const cur = levels[u.id] || 0;
     if (cur >= u.maxLevel) continue;
     if (exclude.has(u.id)) continue;

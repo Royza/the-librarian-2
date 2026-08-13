@@ -16,6 +16,48 @@ export const ITEM_COLORS = {
 export const COLOR_KEYS = Object.keys(ITEM_COLORS);
 
 export const THEMES = {
+  cemetery: {
+    id: 'cemetery',
+    name: 'Sunnydale Cemetery',
+    blurb: 'Patrol the graves until sunrise. Keep the Hellmouth quiet and the dead where they belong.',
+    xpToUnlock: 0,
+    winsToUnlock: 0,
+    icon: '🌙',
+    itemNoun: 'relic',
+    itemNounPlural: 'relics',
+    shelfNoun: 'grave',
+    colors: ['slate', 'forest', 'plum', 'cobalt', 'amber', 'crimson'],
+    fog: { color: 0x07101c, near: 18, far: 70 },
+    ambient: { color: 0x172b42, intensity: 0.68 },
+    sun: { color: 0x9bbcff, intensity: 2.15 },
+    lampColor: 0xffbd72,
+    floor: { kind: 'carpet', base: '#16231d', dark: '#0b1210', light: '#334234', repeat: 0.28 },
+    accentFloor: { kind: 'marble', base: '#4a4134', vein: '#211d18', accent: '#71624d' },
+    shelfWood: { base: '#4c5158', light: '#777d83', dark: '#24282d' },
+    wall: '#343b43',
+    itemSize: { w: 0.05, h: 0.24, d: 0.1 },
+    worldIdentity: {
+      architecture: 'moonlit-gothic-cemetery',
+      boulevardName: 'Founders Path',
+      ceiling: 'open-night-sky',
+      perimeter: 'iron-cemetery-fence',
+      shelfContents: 'weathered-graves',
+      looseItems: ['book'],
+      counter: { kind: 'cemeteryGate', name: 'Sunnydale Cemetery Gates', hw: 3.8, hd: 0.5, height: 4.5 },
+      clutter: [{ kind: 'shrub', hw: 0.6, hd: 0.6, height: 1.0 }],
+      centerpieces: [{ kind: 'obelisk', hw: 0.8, hd: 0.8, height: 5.2 }],
+      workFixture: { kind: 'headstone', hw: 0.4, hd: 0.2, height: 1.2 },
+      roomFixture: { kind: 'graveSlab', hw: 0.7, hd: 1.0, height: 0.25 },
+      displayFixture: { kind: 'stoneAngel', hw: 1.0, hd: 0.8, height: 2.8 },
+      featureFixture: { kind: 'crypt', hw: 3.0, hd: 2.5, height: 3.4 },
+      sign: 'cemeteryGate',
+    },
+    ceilingHeight: 48,
+    envPalette: { sky: '#071326', warm: '#ffad68', bounce: '#182d2b', skyStrength: 1.8, warmStrength: 1.2 },
+    hazards: [],
+    music: 'cemetery',
+  },
+
   library: {
     id: 'library',
     name: 'The Grand Library',
@@ -223,7 +265,7 @@ export const THEMES = {
   },
 };
 
-export const THEME_ORDER = ['library', 'videostore', 'recordstore', 'grocery'];
+export const THEME_ORDER = ['cemetery', 'library', 'videostore', 'recordstore', 'grocery'];
 
 export function themeUnlocked(themeId, lifetimeXP) {
   return lifetimeXP >= (THEMES[themeId]?.xpToUnlock ?? Infinity);

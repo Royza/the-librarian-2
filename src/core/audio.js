@@ -206,6 +206,22 @@ export class AudioEngine {
         this._tone({ freq: 110 * rate, type: 'sine', dur: 0.22, gain: 0.2 * v, slide: 0.45, pan });
         this._noise({ dur: 0.1, gain: 0.1 * v, filterFreq: 500, sweep: 0.3, pan });
         break;
+      case 'stake':
+        this._noise({ dur: 0.12, gain: 0.13 * v, filterFreq: 1750 * rate, sweep: 0.3, q: 1.1, pan });
+        this._tone({ freq: 145 * rate, type: 'triangle', dur: 0.18, gain: 0.16 * v, slide: 0.52, pan });
+        break;
+      case 'kick':
+        this._tone({ freq: 82 * rate, type: 'sine', dur: 0.28, gain: 0.28 * v, slide: 0.4, pan });
+        this._noise({ dur: 0.16, gain: 0.15 * v, filterFreq: 620, sweep: 0.2, type: 'lowpass', pan });
+        break;
+      case 'vampireDust':
+        this._noise({ dur: 0.72, gain: 0.22 * v, filterFreq: 3100, sweep: 0.08, q: 1.6, pan });
+        this._tone({ freq: 310 * rate, type: 'sine', dur: 0.52, gain: 0.12 * v, slide: 2.1, pan });
+        break;
+      case 'vampireRise':
+        this._tone({ freq: 62, type: 'sawtooth', dur: 1.25, gain: 0.2 * v, slide: 0.55, filter: { type: 'lowpass', freq: 520, sweep: 1.3, q: 3 } });
+        this._noise({ dur: 0.9, gain: 0.12 * v, filterFreq: 420, sweep: 0.45, type: 'lowpass' });
+        break;
       case 'bookfall':
         this._noise({ dur: 0.16, gain: 0.11 * v, filterFreq: 1500 * rate, sweep: 0.3, q: 0.9, pan });
         this._tone({ freq: 150 * rate, type: 'sine', dur: 0.14, gain: 0.09 * v, slide: 0.6, pan });
@@ -316,12 +332,13 @@ export class AudioEngine {
     const s = this._step++;
 
     const SCALES = {
+      cemetery: [0, 2, 3, 5, 7, 8, 11],  // tense harmonic minor under the patrol
       warm: [0, 2, 3, 5, 7, 8, 10],       // aeolian, cosy and a bit wistful
       synth: [0, 2, 3, 5, 7, 9, 10],
       funk: [0, 3, 5, 6, 7, 10],
       muzak: [0, 2, 4, 5, 7, 9, 11],
     };
-    const ROOTS = { warm: 45, synth: 43, funk: 41, muzak: 48 };
+    const ROOTS = { cemetery: 38, warm: 45, synth: 43, funk: 41, muzak: 48 };
     const scale = SCALES[this._theme] || SCALES.warm;
     const root = ROOTS[this._theme] || 45;
 

@@ -1,5 +1,5 @@
 import { THEMES, THEME_ORDER } from '../data/themes.js';
-import { META_LIST, metaCost } from '../data/meta.js';
+import { META_LIST, metaCost, metaPresentation } from '../data/meta.js';
 import { SIGNATURE_POWER_IDS, UPGRADES } from '../data/upgrades.js';
 import { CHARACTER_LIST } from '../data/characters.js';
 import { QUALITY, autoDetectQuality } from '../render/renderer.js';
@@ -8,6 +8,10 @@ import { dailyId, dailySeedForDay } from '../core/daily.js';
 import { clearPlaytestHistory, getPlaytestHistory } from '../systems/telemetry.js';
 
 const LOADING_COPY = {
+  cemetery: {
+    lines: ['Opening the cemetery gates…', 'Checking the fresh graves…', 'Waiting for something to rise…', 'Sharpening the stakes…'],
+    subtitle: 'GENERATING A CEMETERY THAT HAS NEVER EXISTED BEFORE',
+  },
   library: {
     lines: [
       'Shelving the shelves…',
@@ -37,13 +41,11 @@ const LOADING_COPY = {
 
 const TIPS = [
   '<b>WASD</b> to move · <b>Shift</b> to sprint · <b>Space</b> to dash',
-  'Books vacuum in automatically — just get close.',
-  'Stand near a shelf of the matching color to file what you carry.',
-  'Chaos falls fastest when the floor is completely clear.',
-  '<b>Q</b> beams distant books to you · <b>E</b> throws them home · <b>F</b> shushes nearby books of one color',
-  'Combos multiply XP. Keep filing without pausing.',
-  'Bullies must be chased down. Karens must be obeyed.',
-  '<b>R</b> mops up whatever a sick child leaves behind.',
+  '<b>Q</b> attacks with your stake · <b>E</b> delivers a powerful Slayer kick.',
+  'Dodge through danger with <b>Space</b>; the Slayer is briefly invulnerable.',
+  'Vampires raise Hellmouth Activity while they remain active.',
+  'Slay vampires in quick succession to build a combo and earn more XP.',
+  'Keep supernatural activity controlled until sunrise.',
 ];
 
 /** Every full-screen overlay: menu, level select, shop, draft, pause, results. */
@@ -269,21 +271,21 @@ export class Menus {
     const daily = dailySeedInfo();
     this._show(`
       <div class="title-block">
-        <div class="kicker">THE LIBRARIAN</div>
-        <h1>THE LIBRARIAN <span style="font-size:.62em">II</span></h1>
-        <div class="sub">“Look, Ma, I Could Read Good”</div>
+        <div class="kicker">SUNNYDALE, CALIFORNIA · 1999</div>
+        <h1>BUFFY<br><span style="font-size:.62em">CEMETERY PATROL</span></h1>
+        <div class="sub">Into every generation, a Slayer is born.</div>
       </div>
       <div class="rule"></div>
       <div class="menu-actions">
-        <button class="btn primary" data-a="play">BEGIN A SHIFT</button>
-        <button class="btn daily" data-a="daily">📅 DAILY SHIFT<small>${daily.label} · SAME FLOOR FOR EVERYONE</small></button>
+        <button class="btn primary" data-a="play">BEGIN PATROL</button>
+        <button class="btn daily" data-a="daily">🌙 DAILY PATROL<small>${daily.label} · SAME CEMETERY FOR EVERYONE</small></button>
         <button class="btn" data-a="seed">PLAY A SEED<small>REPLAY A COPIED FLOOR OR SHARE ONE WITH A FRIEND</small></button>
-        <button class="btn" data-a="levels">CHOOSE A BRANCH<small>${s.unlockedThemes().length} of ${THEME_ORDER.length} unlocked</small></button>
-        <button class="btn" data-a="shop">STAFF DEVELOPMENT<small>${s.cards} library cards to spend</small></button>
+        <button class="btn" data-a="levels">CHOOSE A LOCATION<small>${s.unlockedThemes().length} of ${THEME_ORDER.length} unlocked</small></button>
+        <button class="btn" data-a="shop">SLAYER TRAINING<small>${s.cards} watcher tokens to spend</small></button>
         <button class="btn ghost" data-a="settings">SETTINGS</button>
       </div>
       <div class="stats-strip">
-        <div class="stat"><div class="v">${s.data.runs}</div><div class="k">SHIFTS</div></div>
+        <div class="stat"><div class="v">${s.data.runs}</div><div class="k">PATROLS</div></div>
         <div class="stat"><div class="v">${s.data.wins}</div><div class="k">SURVIVED</div></div>
         <div class="stat"><div class="v">${s.data.bestScore.toLocaleString()}</div><div class="k">BEST SCORE</div></div>
         <div class="stat"><div class="v">${Math.floor(s.lifetimeXP).toLocaleString()}</div><div class="k">LIFETIME XP</div></div>
@@ -294,7 +296,7 @@ export class Menus {
 
     this._click('[data-a]', (el) => {
       const a = el.dataset.a;
-      if (a === 'play') this.showCharacterSelect(this.game.save.unlockedThemes()[0]);
+      if (a === 'play') this.showCharacterSelect('cemetery');
       if (a === 'daily') this.showLevels(capturedDailyRunOptions(daily));
       if (a === 'seed') this.showSeedSetup();
       if (a === 'levels') this.showLevels();
@@ -372,19 +374,22 @@ export class Menus {
   showCharacterSelect(themeId, runOptions = {}) {
     const last = this.game.save.data.lastCharacter;
     const theme = THEMES[themeId];
-    const cards = CHARACTER_LIST.map((ch) => `
+    const availableCharacters = themeId === 'cemetery'
+      ? CHARACTER_LIST.filter((ch) => ch.id === 'buffy')
+      : CHARACTER_LIST.filter((ch) => ch.id !== 'buffy');
+    const cards = availableCharacters.map((ch) => `
       <div class="char-card ${ch.id === last ? 'last' : ''}" data-char="${ch.id}">
         ${ch.id === last ? '<div class="last-tag">LAST PLAYED</div>' : ''}
         <div class="char-stage"><canvas data-portrait="${ch.id}"></canvas></div>
         <h3>${ch.name}</h3>
         <div class="char-role">${ch.icon} ${ch.title}</div>
         <p>${ch.blurb}</p>
-        <div class="char-trait">${ch.trait || 'A balanced librarian for any shift.'}</div>
+        <div class="char-trait">${ch.trait || 'Ready for patrol.'}</div>
         <div class="swatches">${ch.swatch.map((c) => `<i style="background:${c}"></i>`).join('')}</div>
       </div>`).join('');
 
     this._show(`
-      <div class="section-title">WHO IS ON SHIFT?</div>
+      <div class="section-title">WHO IS ON PATROL?</div>
       <div class="section-sub">${theme.icon} ${theme.name.toUpperCase()}${runOptions.challenge === 'daily' ? ' &nbsp;·&nbsp; 📅 DAILY CHALLENGE' : ''}</div>
       <div class="chars">${cards}</div>
     `, 'character', () => {
@@ -419,6 +424,7 @@ export class Menus {
   showShop() {
     const s = this.game.save;
     const items = META_LIST.map((def) => {
+      const copy = metaPresentation(def, this.game.theme?.id || 'cemetery');
       const lvl = s.metaLevel(def.id);
       const maxed = lvl >= def.max;
       const cost = maxed ? 0 : metaCost(def, lvl);
@@ -426,8 +432,8 @@ export class Menus {
       const pips = Array.from({ length: def.max }, (_, i) => `<i class="${i < lvl ? 'on' : ''}"></i>`).join('');
       return `
         <div class="shop-item ${afford ? 'buyable' : ''}" data-id="${def.id}">
-          <div class="head"><span class="ico">${def.icon}</span><h4>${def.name}</h4></div>
-          <p>${def.desc(Math.min(def.max, lvl + 1))}</p>
+          <div class="head"><span class="ico">${copy.icon}</span><h4>${copy.name}</h4></div>
+          <p>${copy.desc(Math.min(def.max, lvl + 1))}</p>
           <div class="foot">
             <span class="pips">${pips}</span>
             <span class="price ${maxed ? 'max' : afford ? '' : 'cant'}">${maxed ? 'MAXED' : `${cost} 🎟`}</span>
@@ -436,9 +442,9 @@ export class Menus {
     }).join('');
 
     this._show(`
-      <div class="section-title">STAFF DEVELOPMENT</div>
-      <div class="section-sub">PERMANENT PERKS — THEY CARRY INTO EVERY FUTURE SHIFT</div>
-      <div class="wallet">🎟 ${s.cards} LIBRARY CARDS</div>
+      <div class="section-title">SLAYER TRAINING</div>
+      <div class="section-sub">PERMANENT PERKS — THEY CARRY INTO EVERY FUTURE PATROL</div>
+      <div class="wallet">🎟 ${s.cards} WATCHER TOKENS</div>
       <div class="shop">${items}</div>
     `, 'shop', () => {
       this._returnToMain();
@@ -724,7 +730,7 @@ export class Menus {
     });
   }
 
-  showLoading(themeId = 'library') {
+  showLoading(themeId = 'cemetery') {
     const copy = LOADING_COPY[themeId] || LOADING_COPY.library;
     this._show(`
       <div class="loading-inner">
@@ -811,9 +817,9 @@ export class Menus {
       <div class="section-sub">${g.theme.name.toUpperCase()}${g.run.isDaily ? ' · 📅 DAILY SHIFT' : ''}</div>
       <div class="seed-row"><button class="seed-chip" data-copy-seed="${escapeAttr(String(g.seed))}" title="Copy full seed">SEED ${escapeHTML(String(g.seed))}</button></div>
       <div class="results-grid">
-        <div class="result-stat"><div class="v">${g.run.shelved}</div><div class="k">FILED</div></div>
-        <div class="result-stat"><div class="v">${g.run.kidsCalmed}</div><div class="k">CALMED</div></div>
-        <div class="result-stat"><div class="v">${Math.floor(g.run.chaos)}%</div><div class="k">CHAOS</div></div>
+        <div class="result-stat"><div class="v">${g.theme.id === 'cemetery' ? g.run.vampiresSlain : g.run.shelved}</div><div class="k">${g.theme.id === 'cemetery' ? 'VAMPIRES SLAIN' : 'FILED'}</div></div>
+        <div class="result-stat"><div class="v">${g.kids?.count ?? g.run.kidsCalmed}</div><div class="k">${g.theme.id === 'cemetery' ? 'ACTIVE THREATS' : 'CALMED'}</div></div>
+        <div class="result-stat"><div class="v">${Math.floor(g.run.chaos)}%</div><div class="k">${g.theme.id === 'cemetery' ? 'HELLMOUTH' : 'CHAOS'}</div></div>
         <div class="result-stat"><div class="v">${p.level}</div><div class="k">LEVEL</div></div>
       </div>
       <div style="text-align:center;margin:16px 0">${owned}</div>
@@ -821,7 +827,7 @@ export class Menus {
       <div class="menu-actions">
         <button class="btn primary" data-a="resume">RESUME</button>
         <button class="btn" data-a="settings">SETTINGS</button>
-        <button class="btn ghost" data-a="quit">ABANDON SHIFT</button>
+        <button class="btn ghost" data-a="quit">ABANDON PATROL</button>
       </div>
       <div class="hint-row">${randomTip(this.game)}</div>
     `, 'pause');
@@ -837,10 +843,10 @@ export class Menus {
   showResults(won, reason, r, xpGained) {
     const s = this.game.save;
     const REASONS = {
-      chaos: 'The chaos meter hit 100%. The building has been surrendered to the children.',
-      health: 'You were bumped into one too many times. Take the rest of the day.',
-      survived: 'Closing time. Every book accounted for. Mostly.',
-      quit: 'You clocked out early. Nobody blames you.',
+      chaos: 'Hellmouth Activity reached critical mass. Sunnydale is in serious trouble.',
+      health: 'The vampires overwhelmed the Slayer before sunrise.',
+      survived: 'Sunrise. The surviving vampires retreat and the cemetery falls quiet.',
+      quit: 'The patrol ended early. The night is not getting any safer.',
     };
     const unlocked = s.lastUnlockedTheme ? THEMES[s.lastUnlockedTheme] : null;
     const telemetry = r.telemetry || {};
@@ -850,24 +856,24 @@ export class Menus {
 
     this._show(`
       <div class="title-block">
-        <div class="kicker">${won ? 'SHIFT COMPLETE' : 'SHIFT ABANDONED'}</div>
-        <h1 style="font-size:clamp(calc(34px * var(--ui-text-scale)),calc(6vw * var(--ui-text-scale)),calc(76px * var(--ui-text-scale)))">${won ? 'CLOSING TIME' : 'PANDEMONIUM'}</h1>
+        <div class="kicker">${won ? 'PATROL COMPLETE' : 'PATROL FAILED'}</div>
+        <h1 style="font-size:clamp(calc(34px * var(--ui-text-scale)),calc(6vw * var(--ui-text-scale)),calc(76px * var(--ui-text-scale)))">${won ? 'SUNRISE' : 'HELLMOUTH RISING'}</h1>
         <div class="sub" style="font-style:normal;letter-spacing:.12em;font-size:calc(13px * var(--ui-text-scale));font-family:var(--ui);opacity:.7">${REASONS[reason] || ''}</div>
       </div>
       <div class="results-grid">
         <div class="result-stat"><div class="v">${r.score.toLocaleString()}</div><div class="k">SCORE</div></div>
         <div class="result-stat"><div class="v">${fmt(r.elapsed)}</div><div class="k">SURVIVED</div></div>
-        <div class="result-stat"><div class="v">${r.shelved}</div><div class="k">BOOKS FILED</div></div>
-        <div class="result-stat"><div class="v">${r.kidsCalmed}</div><div class="k">KIDS CALMED</div></div>
+        <div class="result-stat"><div class="v">${r.vampiresSlain || 0}</div><div class="k">VAMPIRES SLAIN</div></div>
+        <div class="result-stat"><div class="v">×${r.bestCombo}</div><div class="k">SLAY COMBO</div></div>
         <div class="result-stat"><div class="v">${r.bossesBeaten}</div><div class="k">BOSSES</div></div>
         <div class="result-stat"><div class="v">${r.disastersSurvived}</div><div class="k">DISASTERS</div></div>
         <div class="result-stat"><div class="v">×${r.bestCombo}</div><div class="k">BEST COMBO</div></div>
-        <div class="result-stat"><div class="v">${Math.floor(r.peakChaos)}%</div><div class="k">PEAK CHAOS</div></div>
+        <div class="result-stat"><div class="v">${Math.floor(r.peakChaos)}%</div><div class="k">PEAK HELLMOUTH</div></div>
       </div>
       <div class="unlock-note">
         ${r.unscoredTraining
           ? 'TRAINING ATTEMPT · NOT RECORDED OR REWARDED'
-          : `+${Math.floor(xpGained).toLocaleString()} lifetime XP &nbsp;·&nbsp; +${s.lastCardsEarned} 🎟 library cards`}
+          : `+${Math.floor(xpGained).toLocaleString()} lifetime XP &nbsp;·&nbsp; +${s.lastCardsEarned} watcher tokens`}
       </div>
       ${unlocked ? `<div class="unlock-note" style="border-color:var(--gold)">🎉 NEW BRANCH UNLOCKED — ${unlocked.icon} <b>${unlocked.name}</b></div>` : ''}
       <div class="telemetry-panel">
@@ -882,7 +888,7 @@ export class Menus {
       <div class="seed-row"><button class="seed-chip" data-copy-seed="${escapeAttr(String(this.game.seed))}" title="Copy full seed">${r.isDaily ? '📅 DAILY · ' : ''}SEED ${escapeHTML(String(this.game.seed))}</button></div>
       <div class="rule"></div>
       <div class="menu-actions">
-        <button class="btn primary" data-a="again">ANOTHER SHIFT</button>
+        <button class="btn primary" data-a="again">ANOTHER PATROL</button>
         <button class="btn" data-a="shop">SPEND ${s.cards} 🎟</button>
         <button class="btn ghost" data-a="menu">MAIN MENU</button>
       </div>

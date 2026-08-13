@@ -16,6 +16,7 @@ import { ItemSystem, ITEM_STATE } from './systems/items.js';
 import { FX } from './systems/fx.js';
 import { Player } from './entities/player.js';
 import { KidManager } from './entities/kid.js';
+import { VampireManager } from './entities/vampire.js';
 import { BossManager } from './entities/bosses.js';
 import { Director } from './systems/director.js';
 import { DisasterManager } from './systems/disasters.js';
@@ -23,6 +24,7 @@ import { PowerSystem } from './systems/powers.js';
 import { Progression } from './systems/progression.js';
 import {
   CHAOS_BALANCE,
+  cemeteryPressureRate,
   chaosPressureRate,
   cleanFloorReliefRate,
   isChaosPaused,
@@ -46,7 +48,7 @@ export const STATE = {
   VICTORY: 'victory',
 };
 
-const RUN_DURATION = 15 * 60;   // one shift: fifteen minutes of children
+const RUN_DURATION = 15 * 60;   // one patrol: hold the cemetery until sunrise
 
 export function presentationFxDelta(state, dt) {
   return state === STATE.PAUSED ? 0 : dt;
@@ -117,7 +119,7 @@ export class Game {
     this.audio.setIntensity(0.1);
   }
 
-  async startRun({ themeId = 'library', seed = null, characterId = null, challenge = null, dailyDay: requestedDailyDay = null } = {}) {
+  async startRun({ themeId = 'cemetery', seed = null, characterId = null, challenge = null, dailyDay: requestedDailyDay = null } = {}) {
     // Result-only announcements belong to exactly one run. Clear them before
     // training or an unscored abort can inherit an earlier branch unlock.
     this.save.lastCardsEarned = 0;
@@ -130,7 +132,9 @@ export class Game {
 
     const theme = THEMES[themeId];
     this.theme = theme;
-    this.characterId = characterId || this.save.data.lastCharacter || DEFAULT_CHARACTER;
+    this.characterId = theme.id === 'cemetery'
+      ? DEFAULT_CHARACTER
+      : (characterId || this.save.data.lastCharacter || 'marion');
     this.save.setLastCharacter(this.characterId);
     const isDaily = challenge === 'daily';
     // A results-screen retry belongs to the daily challenge it started on,
@@ -162,7 +166,8 @@ export class Game {
     this.items.onShelved = (it, bay) => this.onItemShelved(it, bay);
 
     this.player = new Player(this, this.layout.spawn.x, this.layout.spawn.z);
-    this.kids = new KidManager(this);
+    this.vampires = theme.id === 'cemetery' ? new VampireManager(this) : null;
+    this.kids = this.vampires || new KidManager(this);
     this.bosses = new BossManager(this);
     this.powers = new PowerSystem(this);
     this.disasters = new DisasterManager(this);
@@ -179,6 +184,8 @@ export class Game {
       shelved: 0,
       pickedUp: 0,
       kidsCalmed: 0,
+      vampiresSlain: 0,
+      supernaturalEventsResolved: 0,
       bossesBeaten: 0,
       disastersSurvived: 0,
       combo: 0,
@@ -236,7 +243,7 @@ export class Game {
     this.items?.dispose();
     this.fx?.dispose();
     this.level?.dispose();
-    this.player = null; this.kids = null; this.bosses = null;
+    this.player = null; this.kids = null; this.vampires = null; this.bosses = null;
     this.powers = null; this.disasters = null; this.items = null;
     this.fx = null; this.level = null; this.director = null;
     this.telemetry = null; this.branchMechanics = null;
@@ -423,8 +430,10 @@ export class Game {
     }
 
     this.player.update(dt, this.input);
-    this.powers.update(dt, this.input);
-    this.items.update(dt, this);
+    if (this.theme?.id !== 'cemetery') {
+      this.powers.update(dt, this.input);
+      this.items.update(dt, this);
+    }
     this.kids.update(dt);
     this.bosses.update(dt);
     this.disasters.update(dt);
@@ -432,7 +441,7 @@ export class Game {
     this.branchMechanics?.update(dt);
     this.fx.update(dt);
     this.level.update(dt, this.player, this.render.camera.position);
-    this.items.render(this.render.camera);
+    if (this.theme?.id !== 'cemetery') this.items.render(this.render.camera);
 
     this._updateChaos(dt);
     // Second Wind and other run-ending guards must see Chaos added by this
@@ -440,7 +449,8 @@ export class Game {
     this.progression.update(dt);
     this.telemetry?.update(dt);
 
-    this.audio.setIntensity(Math.min(1, r.chaos / r.maxChaos * 1.15 + (this.bosses.active.length ? 0.3 : 0)));
+    const headlineActive = this.bosses.active.length || this.vampires?.active.some((v) => v.master);
+    this.audio.setIntensity(Math.min(1, r.chaos / r.maxChaos * 1.15 + (headlineActive ? 0.3 : 0)));
 
     if (r.chaos >= r.maxChaos) this.endRun(false, 'chaos');
     else if (this.player.health <= 0) this.endRun(false, 'health');
@@ -449,6 +459,18 @@ export class Game {
 
   _updateChaos(dt) {
     const r = this.run;
+    if (this.theme?.id === 'cemetery') {
+      const activity = this.vampires?.activityPressure || 0;
+      // Population pressure remains the primary threat, but a Slayer who is
+      // actively hunting must have time to cross the generated grounds. The
+      // coefficient targets an idle loss around mid-patrol while letting a
+      // steady 3–4 dustings/minute reach sunrise.
+      const rate = cemeteryPressureRate({ elapsed: r.elapsed, duration: r.duration, activity });
+      this.addChaos(rate * dt);
+      if (activity <= 0 && r.chaos > 4) r.chaos = Math.max(4, r.chaos - 0.18 * dt);
+      r.peakChaos = Math.max(r.peakChaos, r.chaos);
+      return;
+    }
     const floor = this.items.floorCount;
     const held = this.items.looseCount - floor;
     const messes = this.disasters.messCount;

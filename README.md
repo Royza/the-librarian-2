@@ -1,24 +1,52 @@
-# The Librarian 2 — *“Look, Ma, I Could Read Good”*
+# Buffy: Cemetery Patrol
 
-A 3D reimagining of [The Librarian](https://github.com/mreflow/the-librarian-game).
-You are the last line of defense between a very large library and the children
-inside it. Shelve faster than they can unshelve. Keep the Chaos meter under 100%
-until closing time.
+A procedural 3D action roguelite vertical slice built on the original *The
+Librarian 2* engine. Play as Buffy Summers, patrol a generated moonlit cemetery,
+stake rising vampires, and keep Hellmouth Activity under control until sunrise.
+
+The cemetery is now the default experience. It uses an outdoor procedural
+layout, simple generated geometry, the existing WebGL2 renderer and post stack,
+the existing collision/pathfinding infrastructure, and a Slayer-specific draft
+pool. The older library and retail branches remain in source while the new game
+direction develops.
 
 ```bash
-npm install
-npm run dev      # http://localhost:5273
-npm test         # deterministic mechanics + lifecycle + reachability suite
-npm run build    # production bundle in dist/
+./start.sh       # installs dependencies when needed, then starts Vite
+                 # http://localhost:5273
 ```
 
-Runs in any WebGL2 browser. **There are no asset files** — every texture,
+The equivalent manual commands and project checks are:
+
+```bash
+npm ci
+npm run dev
+npm test         # deterministic mechanics + lifecycle + reachability suite
+npm run build    # production bundle in dist/
+npm run preview  # production build at http://localhost:4173
+```
+
+Use a current Node.js LTS release (Node 22 is the tested path). For ordinary
+play and development, `./start.sh` is the quickest route; arguments are passed
+through to Vite (for example, `./start.sh --host 0.0.0.0`). Use `npm run build
+&& npm run preview` when judging the optimized production bundle. Do not open
+`index.html` directly from disk because ES modules and browser security rules
+expect an HTTP server.
+
+Runs in any WebGL2 browser, including Firefox. **There are no asset files** — every texture,
 material, character, sound effect and piece of music in the game is generated in
 code at boot.
 
 ---
 
-## The loop
+## Cemetery patrol loop
+
+1. Vampires rise from graves and crypt areas with varied health, speed, and appearance.
+2. Use `Q` for a forgiving stake attack, `E` for a stronger sweeping kick, and `Space` to dodge.
+3. Active vampires increase Hellmouth Activity; slaying them lowers it and awards XP.
+4. Draft coherent Slayer upgrades such as stake damage, attack speed, healing, dodge distance, and critical staking.
+5. Keep activity below 100% and survive until sunrise.
+
+## Legacy library loop
 
 1. **Kids arrive.** They pull items off shelves. Some drop them where they stand;
    some sprint off and dump them somewhere inconvenient.
@@ -34,7 +62,7 @@ code at boot.
 Lose at Chaos 100% or when health reaches zero. Chaos is the primary fail state;
 health is recoverable attrition pressure and regenerates when you're left alone.
 
-## Characters
+## Legacy characters
 
 Pick your librarian at the start of every shift. Each has a small side-grade
 that changes routing without making one a strict upgrade.
@@ -55,23 +83,22 @@ portraits can never drift from the models.
 | `WASD` / arrows | Move |
 | `Shift` | Sprint (costs stamina) |
 | `Space` | Dash (brief invulnerability) |
-| `Q` | **Dewey Decimal Beam** — tractor beam that drags loose books to you, and rips them out of small hands |
-| `E` | **Bookerang** — throw what you're carrying at its shelf from across the room |
-| `F` | **Chromatic Shush** — shockwave that sends nearby books of one color flying home |
-| `R` | Mop up a spill |
+| `Q` | **Stake attack** — Buffy turns toward the nearest vampire in range and lunges |
+| `E` | **Slayer kick** — slower, stronger, wider attack with heavy knockback |
 | Left-mouse drag | Orbit the camera horizontally and vertically (inverted by default; change it in Settings) |
 | Mouse move / wheel | Aim the beam / zoom the camera |
 | `Esc` | Pause · `` ` `` Debug overlay · `M` Mute |
 
-Full gamepad support: left stick moves, right stick aims, `A` dashes, `B` mops,
-`X` uses Chromatic Shush, `Y`/`RB` uses Bookerang, `LB`/`LT` uses the beam,
-`RT` sprints, and Start pauses. Keyboard controls can be remapped in Settings.
+Full gamepad support: left stick moves, right stick aims, `A` dashes,
+`Y`/`RB` kicks, `LB`/`LT` stakes, `RT` sprints, and Start pauses. Keyboard
+controls can be remapped in Settings. The legacy branches retain their beam,
+Bookerang, Chromatic Shush, and mop actions on the same configurable bindings.
 The full Settings screen is also available from Pause, so camera, audio, display,
 and accessibility preferences can be changed without abandoning a shift.
 
-The first regular shift includes a short, action-driven tutorial. It pauses the
-scored clock, guarantees a signature-power draft, and teaches a real successful
-use. It is consumed once, can be disabled, or can be reset from Settings.
+The first cemetery patrol presents a one-time quick brief without pausing the
+run. Legacy branches retain their longer action-driven first-shift tutorial.
+Tutorials can be disabled or reset from Settings.
 
 ## Branches
 
@@ -118,10 +145,11 @@ beam.
 
 ## Meta progression
 
-Runs pay out **Library Cards**. Those buy permanent perks in Staff Development —
-extra carry slots, faster shoes, starting with a power already unlocked, extra
-draft choices, rerolls, a Second Wind that catches one run-ending chaos spike.
-Everything persists in `localStorage`.
+Runs pay out **Watcher Tokens** (retained internally as the original card
+currency for save compatibility). Slayer Training buys permanent damage,
+movement, health, stamina, starting-combat, draft, reroll, mitigation, and
+Second Wind perks. Legacy branches present and apply the equivalent librarian
+perks. Everything persists in `localStorage`.
 
 The menu also offers a UTC **Daily Shift**: every player gets the same seeded
 floor for a given branch and day, with local per-branch records. Any ordinary
@@ -146,7 +174,7 @@ src/
   core/       loop-agnostic services: input, audio, camera rig, RNG, save, events
   render/     renderer + post stack, procedural textures, materials, env probe
   world/      floor-plan generator, mesh assembly, collision + pathfinding, props
-  entities/   procedural humanoid rig, player, kids, bosses
+  entities/   procedural humanoid rig, player, vampires, kids, bosses
   systems/    items, powers, disasters, director, progression, branch rules,
               tutorial, local telemetry, FX
   data/       themes, upgrades, meta upgrades, shelf styles
@@ -155,8 +183,10 @@ src/
 
 ### Procedural generation
 
-`world/generator.js` produces pure data — no three.js — so it's fast (~10 ms) and
-testable from Node. Each run:
+`world/generator.js` produces pure data — no three.js — and is testable from
+Node. Cemetery runs generate an open navigable perimeter, paths, graves, crypts,
+mausoleums, monuments, trees, vampire rise points, and the Sunnydale gates.
+Legacy indoor runs use the district process below:
 
 1. BSP-partitions the hall into districts, carving a corridor at every split.
 2. Forces two grand boulevards through the middle so the space stays legible and
@@ -197,10 +227,9 @@ Four quality presets, auto-detected and overridable in Settings.
 
 `core/audio.js` is a small synthesizer: every sound effect is an envelope over an
 oscillator or a filtered noise burst, routed through a shared convolution reverb
-(a library is a big stone room and should sound like one) and a bus compressor.
-The score is generative — a pad, a bass pulse, an arpeggio and a heartbeat that
-layer in as the Chaos meter climbs. Important boss, disaster, level-up, and
-result cues temporarily duck the music so objectives remain audible.
+and bus compressor. Cemetery mode has its own minor-key generative score plus
+stake, kick, rising, and dusting cues. Pads, bass, arpeggios, and a heartbeat
+layer in with pressure; important cues temporarily duck the music.
 
 ---
 

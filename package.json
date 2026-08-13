@@ -10,7 +10,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "The Librarian 2 \u2014 Look, Ma, I Could Read Good. A 3D roguelite about shelving books faster than children can unshelve them.",
+  "description": "A procedural Three.js cemetery action roguelite about Buffy patrolling until sunrise.",
   "dependencies": {
     "postprocessing": "^6.39.4",
     "three": "^0.185.1"

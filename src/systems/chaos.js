@@ -23,6 +23,12 @@ export const CHAOS_BALANCE = Object.freeze({
 
 const SHIFT_SECONDS = 15 * 60;
 
+/** Per-second Hellmouth gain before permanent dampening. */
+export function cemeteryPressureRate({ elapsed = 0, duration = SHIFT_SECONDS, activity = 0 } = {}) {
+  const t = clamp01(elapsed / Math.max(1, duration));
+  return 0.035 + t * 0.055 + Math.max(0, activity) * 0.012;
+}
+
 /**
  * A deliberately smooth full-shift curve. Smoothstep has a flat derivative at
  * both ends, avoiding the old minute-five coefficient spike. The larger range

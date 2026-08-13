@@ -12,6 +12,21 @@
   --ui-text-scale: 1;
 }
 
+/* Cemetery vertical slice: cold moonlight, restrained blood-red accents, and
+   warm practical light. Legacy branch screens retain their existing palette. */
+.hud.cemetery .chaos-fill {
+  background: linear-gradient(90deg, #203d65, #704260 55%, #b22e48);
+}
+.hud.cemetery .panel,
+.hud.cemetery .minimap,
+.hud.cemetery .branch-objective {
+  background: linear-gradient(145deg, rgba(5, 13, 24, .92), rgba(20, 17, 27, .84));
+  border-color: rgba(139, 170, 210, .34);
+}
+.hud.cemetery .timer small,
+.hud.cemetery .lvl,
+.hud.cemetery .carry-label { color: #a9c5e8; }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {

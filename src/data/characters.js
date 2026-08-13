@@ -2,6 +2,25 @@
 // choice without turning either character into the objectively correct pick.
 
 export const CHARACTERS = {
+  buffy: {
+    id: 'buffy',
+    name: 'Buffy Summers',
+    title: 'The Slayer',
+    icon: '🗡️',
+    blurb: 'Chosen to stand against the vampires, the demons, and the forces of darkness.',
+    trait: 'Slayer Strength — fast, resilient, and deadly at close range.',
+    bonuses: { pickupRadius: 0, returnRadius: 0, carrySlots: 0, moveSpeedMul: 1.08 },
+    height: 1.68,
+    chunk: 0.9,
+    style: { hair: 'long', sleeves: 'long', cardigan: false, eyeDetail: true },
+    colors: {
+      skin: 0xe7b58f, shirt: 0x6f2736, innerShirt: 0x202126, pants: 0x171b25,
+      hair: 0xc18b45, eye: 0x66869a, shoe: 0x2a211d,
+    },
+    matMap: { torso: 'leather', armU: 'leather', armL: 'leather' },
+    swatch: ['#c18b45', '#6f2736', '#171b25'],
+  },
+
   marion: {
     id: 'marion',
     name: 'Marion',
@@ -70,7 +89,7 @@ export const CHARACTERS = {
 };
 
 export const CHARACTER_LIST = Object.values(CHARACTERS);
-export const DEFAULT_CHARACTER = 'marion';
+export const DEFAULT_CHARACTER = 'buffy';
 
 export function getCharacter(id) {
   return CHARACTERS[id] || CHARACTERS[DEFAULT_CHARACTER];

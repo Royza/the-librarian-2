@@ -115,7 +115,8 @@ export function buildMaterials(theme) {
     }),
 
     fabric: new THREE.MeshStandardMaterial({
-      color: 0x8a2b34, roughness: 0.93, metalness: 0.0, envMapIntensity: 0.65, vertexColors: true,
+      color: theme.id === 'cemetery' ? 0x263f31 : 0x8a2b34,
+      roughness: 0.93, metalness: 0.0, envMapIntensity: 0.65, vertexColors: true,
     }),
 
     leather: new THREE.MeshStandardMaterial({
@@ -130,7 +131,8 @@ export function buildMaterials(theme) {
 
     marble: new THREE.MeshStandardMaterial({
       map: accent.map, roughnessMap: accent.roughnessMap || null,
-      color: 0xd8cfbe, roughness: 0.42, metalness: 0.02, envMapIntensity: 0.9,
+      color: theme.id === 'cemetery' ? 0x777b80 : 0xd8cfbe,
+      roughness: theme.id === 'cemetery' ? 0.82 : 0.42, metalness: 0.02, envMapIntensity: 0.9,
     }),
 
     lampGlow: new THREE.MeshBasicMaterial({

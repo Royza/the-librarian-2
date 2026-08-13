@@ -118,9 +118,9 @@ test('all branch cameras stay inside every wall at corners, zoom, and low ceilin
     chase.setCeiling(theme.ceilingHeight);
     const b = chase.containment;
     assert.ok(Math.abs(b.minX - 1.2) < 1e-9, `${theme.id}: west bound is not the wall's inside face`);
-    assert.ok(Math.abs(b.maxX - 170.8) < 1e-9, `${theme.id}: east bound is not the wall's inside face`);
+    assert.ok(Math.abs(b.maxX - (layout.width - 1.2)) < 1e-9, `${theme.id}: east bound is not the wall's inside face`);
     assert.ok(Math.abs(b.minZ - 1.2) < 1e-9, `${theme.id}: north bound is not the wall's inside face`);
-    assert.ok(Math.abs(b.maxZ - 170.8) < 1e-9, `${theme.id}: south bound is not the wall's inside face`);
+    assert.ok(Math.abs(b.maxZ - (layout.depth - 1.2)) < 1e-9, `${theme.id}: south bound is not the wall's inside face`);
 
     const edgeAndCornerFoci = [
       { x: b.minX + 0.36, z: b.minZ + 0.36 },

@@ -81,3 +81,32 @@ test('the 1:15 rush remains visible when the opening crowd is already at cap', (
   assert.equal(game.kids.maxKids, 6);
   assert.equal(calls.banners[0][0], 'AFTER-SCHOOL RUSH');
 });
+
+test('cemetery patrol schedules two Master Vampires around a coordinated grave wave', () => {
+  const calls = { kids: 0, masters: 0, banners: [], sounds: [] };
+  const game = {
+    theme: { id: 'cemetery' }, rng: new RNG('cemetery-director'),
+    run: { elapsed: 0, tutorialActive: false },
+    progression: { begin() {} },
+    kids: {
+      maxKids: 0,
+      get count() { return calls.kids; },
+      spawnOne() { calls.kids++; return {}; },
+      spawnMaster() { calls.masters++; return {}; },
+    },
+    hud: { banner: (...args) => calls.banners.push(args), toast() {} },
+    audio: { play: (id) => calls.sounds.push(id) },
+  };
+  const director = new Director(game);
+  director.spawnTimer = 9999;
+  game.run.elapsed = 180;
+  director.update(0);
+  game.run.elapsed = 420;
+  director.update(0);
+  game.run.elapsed = 660;
+  director.update(0);
+  assert.equal(calls.masters, 2);
+  assert.equal(calls.kids, 4); // opening rise plus the three-vampire grave wave
+  assert.deepEqual(calls.sounds, ['bossHorn', 'vampireRise', 'bossHorn']);
+  assert.ok(calls.banners.some(([title]) => title === 'FRESH GRAVES OPEN'));
+});

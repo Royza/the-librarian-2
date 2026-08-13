@@ -38,8 +38,12 @@ export class ItemSystem {
     // particles may use Math.random(), but where an item lands changes the run.
     this.rng = new RNG(`${layout.seed}-items`);
 
+    // Cemetery patrols never create loose inventory. Keep one compatibility
+    // slot so shared UI and lifecycle code remain simple without allocating or
+    // scanning the full 600-item library pool every frame.
+    this.capacity = theme.id === 'cemetery' ? 1 : MAX_ITEMS;
     this.items = [];
-    for (let i = 0; i < MAX_ITEMS; i++) {
+    for (let i = 0; i < this.capacity; i++) {
       this.items.push({
         id: i, active: false, state: ITEM_STATE.DEAD,
         x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
@@ -61,12 +65,12 @@ export class ItemSystem {
     for (const kind of looseItemKindsForTheme(theme)) {
       const geo = buildLooseItemGeometry(theme, kind);
       geo.computeBoundingBox();
-      const mesh = new THREE.InstancedMesh(geo, mats.item, MAX_ITEMS);
+      const mesh = new THREE.InstancedMesh(geo, mats.item, this.capacity);
       mesh.name = `loose-items-${kind}`;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       mesh.frustumCulled = false;
-      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_ITEMS * 3).fill(1), 3);
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.capacity * 3).fill(1), 3);
       mesh.count = 0;
       scene.add(mesh);
       this.visuals.set(kind, {
@@ -89,8 +93,8 @@ export class ItemSystem {
       blending: THREE.AdditiveBlending, vertexColors: true, toneMapped: false,
       opacity: 0.9,
     });
-    this.marks = new THREE.InstancedMesh(markGeo, this.markMat, MAX_ITEMS);
-    this.marks.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(MAX_ITEMS * 3).fill(1), 3);
+    this.marks = new THREE.InstancedMesh(markGeo, this.markMat, this.capacity);
+    this.marks.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(this.capacity * 3).fill(1), 3);
     this.marks.frustumCulled = false;
     this.marks.count = 0;
     this.marks.renderOrder = 2;
@@ -440,6 +444,7 @@ const _white = new THREE.Color(1, 1, 1);
 const _res = { x: 0, z: 0, hit: null };
 
 export const LOOSE_ITEM_KINDS = Object.freeze({
+  cemetery: ['book'],
   library: ['book'],
   videostore: ['vhs', 'popcorn'],
   recordstore: ['record'],

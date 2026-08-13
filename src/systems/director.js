@@ -37,11 +37,16 @@ export class Director {
     this.postponed = 0;
     this.introIncidentFired = false;
     this.headlineCount = 0;
+    this.cemeteryBeat = 0;
     game.progression.begin();
   }
 
   update(dt) {
     const g = this.game;
+    if (g.theme?.id === 'cemetery') {
+      this._updateCemetery(dt);
+      return;
+    }
     const minute = g.run.elapsed / 60;
 
     // The first-run guided shift owns the opening beat. Do not let normal kids
@@ -115,6 +120,46 @@ export class Director {
         } else {
           this.eventTimer = 10;
         }
+      }
+    }
+  }
+
+  _updateCemetery(dt) {
+    const g = this.game;
+    const minute = g.run.elapsed / 60;
+    const max = Math.min(18, 4 + Math.floor(minute * 0.9));
+    g.kids.maxKids = max;
+    this.spawnTimer -= dt;
+    if (this.spawnTimer <= 0) {
+      this.spawnTimer = Math.max(2.8, 7.2 - minute * 0.22) * this.rng.range(0.72, 1.25);
+      const deficit = max - g.kids.count;
+      const arrivals = deficit > 6 && minute > 4 ? 2 : 1;
+      for (let i = 0; i < arrivals; i++) g.kids.spawnOne();
+    }
+    if (!this.introIncidentFired && g.run.elapsed >= 4) {
+      this.introIncidentFired = true;
+      g.kids.spawnOne();
+      g.hud.banner('THE DEAD ARE RISING', 'Stake vampires and keep Hellmouth Activity under control until sunrise.', { danger: true, ms: 3600 });
+    }
+    const beats = [
+      { at: 180, kind: 'master' },
+      { at: 420, kind: 'wave' },
+      { at: 660, kind: 'master' },
+    ];
+    const beat = beats[this.cemeteryBeat];
+    if (beat && g.run.elapsed >= beat.at) {
+      this.cemeteryBeat++;
+      if (beat.kind === 'master') {
+        const master = g.kids.spawnMaster();
+        if (master) {
+          g.audio?.play?.('bossHorn', { volume: 0.8, rate: 0.72 });
+          g.hud.banner('A MASTER VAMPIRE RISES', 'A stronger ancient is feeding the Hellmouth. Dust it for a major reprieve.', { danger: true, ms: 4200 });
+        }
+      } else {
+        g.kids.maxKids = Math.max(g.kids.maxKids, g.kids.count + 3);
+        for (let i = 0; i < 3; i++) g.kids.spawnOne({ elite: i === 0 });
+        g.audio?.play?.('vampireRise', { volume: 0.75 });
+        g.hud.banner('FRESH GRAVES OPEN', 'A nest rises together. Use the Slayer kick to make room.', { danger: true, ms: 3600 });
       }
     }
   }

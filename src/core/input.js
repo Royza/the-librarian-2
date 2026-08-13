@@ -17,8 +17,8 @@ export const DEFAULT_BINDINGS = Object.freeze({
 
 export const REMAP_ACTIONS = Object.freeze([
   ['up', 'MOVE UP'], ['down', 'MOVE DOWN'], ['left', 'MOVE LEFT'], ['right', 'MOVE RIGHT'],
-  ['sprint', 'SPRINT'], ['dash', 'DASH'], ['gravityGun', 'DEWEY DECIMAL BEAM'],
-  ['bookerang', 'BOOKERANG'], ['colorPulse', 'CHROMATIC SHUSH'], ['mop', 'MOP'],
+  ['sprint', 'SPRINT'], ['dash', 'DODGE'], ['gravityGun', 'STAKE ATTACK'],
+  ['bookerang', 'SLAYER KICK'], ['colorPulse', 'SPECIAL'], ['mop', 'INTERACT'],
 ]);
 
 export function formatKeyCode(code) {

@@ -217,7 +217,7 @@ test('existing profiles adopt the inverted default once without erasing later ch
 test('branches unlock through either lifetime XP or wins and report the nearer route', () => {
   globalThis.localStorage = new MemoryStorage();
   const save = new SaveData();
-  assert.deepEqual(save.unlockedThemes(), ['library']);
+  assert.deepEqual(save.unlockedThemes(), ['cemetery', 'library']);
   assert.equal(save.nextUnlock().remainingText, '1 more win');
 
   save.data.wins = 1;

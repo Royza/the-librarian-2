@@ -17,6 +17,7 @@ export class BranchMechanics {
     this.sequenceIndex = 0;
     this.rewardCooldown = 0;
 
+    if (this.id === 'cemetery') this._setObjective('CEMETERY PATROL', 'Keep Hellmouth Activity under control until sunrise', 0, 1);
     if (this.id === 'library') this._setObjective('DEWEY STREAK', 'Build a 12-item filing combo', 0, 12);
     if (this.id === 'videostore') this._startRewindRush(true);
     if (this.id === 'recordstore') this._newSetlist(true);
@@ -30,6 +31,15 @@ export class BranchMechanics {
   update(dt) {
     if (this.game.run.tutorialActive) return;
     this.rewardCooldown = Math.max(0, this.rewardCooldown - dt);
+    if (this.id === 'cemetery') {
+      const o = this.game.run.branchObjective;
+      if (o) {
+        o.progress = Math.min(1, this.game.run.elapsed / this.game.run.duration);
+        o.target = 1;
+        o.detail = `${this.game.run.vampiresSlain} vampires slain · ${this.game.kids.count} active threats`;
+      }
+      return;
+    }
     if (this.id === 'library') this._syncLibraryObjective();
     if (this.id !== 'videostore') return;
     this.timer -= dt;
